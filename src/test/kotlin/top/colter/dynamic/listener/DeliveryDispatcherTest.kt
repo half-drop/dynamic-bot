@@ -249,6 +249,42 @@ class DeliveryDispatcherTest {
     }
 
     @Test
+    fun `routed sink should not cooldown route after uncertain send`() = runBlocking {
+        initDb("uncertain-send-no-cooldown")
+        var calls = 0
+        val sink = RoutedRecordingSink(
+            accountIds = listOf("bot-a"),
+            result = { _, request ->
+                calls += 1
+                if (request.message.id == "message-uncertain-first") {
+                    MessageSendResult.uncertain("OneBot 发送响应超时")
+                } else {
+                    MessageSendResult.sent("receipt-${request.message.id}")
+                }
+            },
+        )
+        val target = testTargetAddress(platformId = "qq", kind = TargetKind.GROUP, externalId = "10001")
+        val first = testMessage("message-uncertain-first", target)
+        val second = testMessage("message-after-uncertain", target)
+        val dispatcher = dispatcher(sink, routing = primaryBackupRouting())
+        MessageDeliveryRepository.enqueue(first)
+
+        val firstStats = dispatcher.dispatchDue()
+        MessageDeliveryRepository.enqueue(second)
+        val secondStats = dispatcher.dispatchDue()
+
+        assertEquals(1, firstStats.sendUnknown)
+        assertEquals(1, secondStats.sent)
+        assertEquals(2, calls)
+        assertEquals(
+            listOf("bot-a:message-uncertain-first", "bot-a:message-after-uncertain"),
+            sink.sent,
+        )
+        assertEquals(DeliveryStatus.SEND_UNKNOWN, MessageDeliveryRepository.findByMessageId(first.id).single().status)
+        assertEquals(DeliveryStatus.SENT, MessageDeliveryRepository.findByMessageId(second.id).single().status)
+    }
+
+    @Test
     fun `delivery with retry disabled should fail without scheduling retry`() = runBlocking {
         initDb("retry-disabled")
         val sink = RecordingSink(

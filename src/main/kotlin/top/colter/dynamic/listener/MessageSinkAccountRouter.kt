@@ -114,8 +114,6 @@ public class MessageSinkAccountRouter(
                     return result.withRoute(route)
                 }
                 is MessageSendResult.Uncertain -> {
-                    markFailure(route.routeId, policy)
-                    onRouteFailure(candidate)
                     accountRouterLogger.warn {
                         "$actionLabel 状态未知，停止路线切换：target=${target.stableValue()}，routeId=${route.routeId}，原因=${result.reason}"
                     }
