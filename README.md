@@ -77,7 +77,7 @@ java -jar dynamic-bot-0.0.7-all.jar
 http://127.0.0.1:2233
 ```
 
-不带 JRE 的包和手动运行 JAR 时需要 Java 17 或更高版本。首次启动时，如果 `config/main.yml` 中没有后台 token，程序会自动生成并写入配置文件，同时在日志中输出。
+不带 JRE 的包和手动运行 JAR 时需要 Java 17 或更高版本。Windows 一键包的 `start.bat` 默认让 Java 使用系统根证书，便于本地代理软件或企业网络证书生效；如需自定义证书库，可通过 `JAVA_OPTS` 显式配置 `javax.net.ssl.trustStore` 覆盖。首次启动时，如果 `config/main.yml` 中没有后台 token，程序会自动生成并写入配置文件，同时在日志中输出。
 
 ### 升级
 

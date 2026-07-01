@@ -61,6 +61,7 @@ dynamic-bot ${version}
 Java 说明：
 - 不带 JRE 的包需要本机已安装 Java 17 或更高版本。
 - 带 JRE 的包内置 Java ${jre_major}，无需额外安装 Java。
+- Windows 启动脚本默认使用系统根证书，便于代理软件或企业网络证书生效；如需自定义证书库，可在 JAVA_OPTS 中显式配置 javax.net.ssl.trustStore。
 
 升级说明：
 - 通常只需要替换根目录下的 dynamic-bot.jar。
@@ -97,7 +98,19 @@ write_windows_launcher() {
     '  )' \
     ')' \
     '' \
-    '"%JAVA_EXE%" %JAVA_OPTS% -jar "%~dp0dynamic-bot.jar" %*' \
+    'rem Windows 下让 Java 默认使用系统根证书；用户已自定义 trustStore 时不覆盖。' \
+    'set "DYNAMIC_BOT_JAVA_OPTS=%JAVA_OPTS%"' \
+    'set "DYNAMIC_BOT_WINDOWS_TRUST_STORE_OPT=-Djavax.net.ssl.trustStoreType=Windows-ROOT"' \
+    'set DYNAMIC_BOT_JAVA_OPTS 2>nul | findstr /i /c:"javax.net.ssl.trustStore=" /c:"javax.net.ssl.trustStoreType=" >nul 2>nul' \
+    'if errorlevel 1 (' \
+    '  if defined DYNAMIC_BOT_JAVA_OPTS (' \
+    '    set "DYNAMIC_BOT_JAVA_OPTS=%DYNAMIC_BOT_JAVA_OPTS% %DYNAMIC_BOT_WINDOWS_TRUST_STORE_OPT%"' \
+    '  ) else (' \
+    '    set "DYNAMIC_BOT_JAVA_OPTS=%DYNAMIC_BOT_WINDOWS_TRUST_STORE_OPT%"' \
+    '  )' \
+    ')' \
+    '' \
+    '"%JAVA_EXE%" %DYNAMIC_BOT_JAVA_OPTS% -jar "%~dp0dynamic-bot.jar" %*' \
     'set "EXIT_CODE=%ERRORLEVEL%"' \
     'if not "%EXIT_CODE%"=="0" (' \
     '  echo.' \
