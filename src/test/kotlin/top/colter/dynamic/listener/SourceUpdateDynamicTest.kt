@@ -3,6 +3,7 @@
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
@@ -26,6 +27,7 @@ import top.colter.dynamic.core.data.MediaCardBlock
 import top.colter.dynamic.core.data.MediaCardStyle
 import top.colter.dynamic.core.data.MediaKind
 import top.colter.dynamic.core.data.MediaRef
+import top.colter.dynamic.core.data.MessageBatch
 import top.colter.dynamic.core.data.MessageContent
 import top.colter.dynamic.core.data.MessageRecordPolicyType
 import top.colter.dynamic.core.data.OutboundMessageKind
@@ -171,6 +173,46 @@ class SourceUpdateDynamicTest {
     }
 
     @Test
+    fun shouldNotMentionAllForLinkParseResultEvenWhenSubscriptionEnablesIt() = runBlocking {
+        initDb("dynamic-listener-link-parse-no-at-all")
+        val eventBus = EventBus()
+        val publisher = createPublisher()
+        val subscriber = createSubscriber()
+        SubscriptionRepository.subscribe(
+            subscriber.id,
+            publisher.id,
+            SubscriptionPolicy(
+                enabledEvents = setOf(SubscriptionEventKind.DYNAMIC),
+                mentionAllEvents = setOf(SubscriptionEventKind.DYNAMIC),
+            ),
+        )
+        val listener = SourceUpdateProcessor(
+            config = MainDynamicConfig(templates = PushTemplates(dynamic = "通知\n{atAll}\n{name}")),
+            eventBus = eventBus,
+            outboundMessageService = successfulOutboundMessageService(),
+        )
+        val received = captureMessageEvents(eventBus)
+
+        val result = listener.process(
+            SourceUpdatePublishRequest(
+                sourcePlugin = "test",
+                deliveryTarget = subscriber,
+                deliveryTag = LINK_PARSE_EVENT_LABEL,
+                update = demoDynamic(publisher),
+            ),
+        )
+        val event = withTimeout(3_000) { received.receive() }
+
+        assertEquals(SourceUpdatePublishStatus.ENQUEUED, result.status)
+        assertEquals(OutboundMessageKind.LINK_RESULT, event.message.kind)
+        assertEquals("default", event.message.renderVariant)
+        assertTrue(event.message.id.contains(":default:link-parse:"))
+        assertEquals("通知\nDemo UP", event.message.batches.single().content.single().fallbackText)
+        assertTrue(event.message.batches.flattenContent().none { it is MessageContent.MentionAll })
+        assertNull(withTimeoutOrNull(300) { received.receive() })
+    }
+
+    @Test
     fun shouldAllowLinkParseDeliveryToDeliveryPausedTarget() = runBlocking {
         initDb("dynamic-listener-link-parse-paused")
         val eventBus = EventBus()
@@ -302,9 +344,76 @@ class SourceUpdateDynamicTest {
         ).associateBy { it.message.targets.single().externalId }
 
         val atAllContents = events.getValue("100").message.batches.single().content
-        assertEquals("tail Demo UP", atAllContents.first().fallbackText)
+        assertEquals("tail Demo UP\n", atAllContents.first().fallbackText)
         assertTrue(atAllContents.last() is MessageContent.MentionAll)
         assertEquals("tail Demo UP", events.getValue("200").message.batches.single().content.single().fallbackText)
+    }
+
+    @Test
+    fun shouldPlaceMentionAllByTemplatePlaceholder() = runBlocking {
+        initDb("dynamic-listener-at-all-template")
+        val eventBus = EventBus()
+        val publisher = createPublisher()
+        val atAllSubscriber = createSubscriber(id = 10, targetId = "100")
+        val normalSubscriber = createSubscriber(id = 11, targetId = "200")
+        SubscriptionRepository.subscribe(
+            atAllSubscriber.id,
+            publisher.id,
+            SubscriptionPolicy(
+                enabledEvents = setOf(SubscriptionEventKind.DYNAMIC),
+                mentionAllEvents = setOf(SubscriptionEventKind.DYNAMIC),
+            ),
+        )
+        SubscriptionRepository.subscribe(normalSubscriber.id, publisher.id)
+        val listener = SourceUpdateProcessor(
+            config = MainDynamicConfig(templates = PushTemplates(dynamic = "通知\n{atAll}\n{name}")),
+            eventBus = eventBus,
+        )
+
+        val received = captureMessageEvents(eventBus)
+        listener.process(SourceUpdatePublishRequest(sourcePlugin = "test", update = demoDynamic(publisher)))
+
+        val events = listOf(
+            withTimeout(3_000) { received.receive() },
+            withTimeout(3_000) { received.receive() },
+        ).associateBy { it.message.targets.single().externalId }
+
+        val atAllContents = events.getValue("100").message.batches.single().content
+        assertEquals("通知\n", atAllContents[0].fallbackText)
+        assertTrue(atAllContents[1] is MessageContent.MentionAll)
+        assertEquals("\nDemo UP", atAllContents[2].fallbackText)
+        assertEquals("通知\nDemo UP", events.getValue("200").message.batches.single().content.single().fallbackText)
+    }
+
+    @Test
+    fun shouldFallbackMentionAllWhenPlaceholderOnlyAppearsInsideForwardBlock() = runBlocking {
+        initDb("dynamic-listener-at-all-forward-fallback")
+        val eventBus = EventBus()
+        val publisher = createPublisher()
+        val subscriber = createSubscriber()
+        SubscriptionRepository.subscribe(
+            subscriber.id,
+            publisher.id,
+            SubscriptionPolicy(
+                enabledEvents = setOf(SubscriptionEventKind.DYNAMIC),
+                mentionAllEvents = setOf(SubscriptionEventKind.DYNAMIC),
+            ),
+        )
+        val listener = SourceUpdateProcessor(
+            config = MainDynamicConfig(templates = PushTemplates(dynamic = "{>>}节点 {atAll}{<<}")),
+            eventBus = eventBus,
+        )
+        val received = captureMessageEvent(eventBus)
+
+        listener.process(SourceUpdatePublishRequest(sourcePlugin = "test", update = demoDynamic(publisher)))
+        val event = withTimeout(3_000) { received.await() }
+
+        val contents = event.message.batches.single().content
+        val forward = assertIs<MessageContent.Forward>(contents[0])
+        assertEquals("节点", forward.nodes.single().batches.single().content.single().fallbackText)
+        assertTrue(forward.nodes.single().batches.single().content.none { it is MessageContent.MentionAll })
+        assertEquals("\n", contents[1].fallbackText)
+        assertTrue(contents[2] is MessageContent.MentionAll)
     }
 
     @Test
@@ -403,6 +512,10 @@ class SourceUpdateDynamicTest {
         return OutboundMessageService(
             sendNow = { request -> MessageSendResult.sent("sink-${request.target.externalId}") },
         )
+    }
+
+    private fun List<MessageBatch>.flattenContent(): List<MessageContent> {
+        return flatMap { it.content }
     }
 
     private fun demoDynamic(

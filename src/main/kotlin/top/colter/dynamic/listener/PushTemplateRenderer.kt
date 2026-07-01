@@ -27,16 +27,25 @@ public class PushTemplateRenderer {
         }
     }
 
-    public fun render(template: String, update: SourceUpdate, drawImage: MediaRef?): List<MessageBatch> {
+    public fun render(
+        template: String,
+        update: SourceUpdate,
+        drawImage: MediaRef?,
+        mentionAll: Boolean = false,
+    ): List<MessageBatch> {
         val splitConversation = update.eventType != SourceEventType.LIVE_ENDED
         return renderTemplate(
             template = template,
             update = update,
             splitConversation = splitConversation,
-            appendPlaceholder = { contents, placeholder, key ->
-                when (val payload = update.payload) {
-                    is DynamicPayload -> appendDynamicPlaceholder(contents, placeholder, key, update, payload, drawImage)
-                    is LivePayload -> appendLivePlaceholder(contents, placeholder, key, update, payload, drawImage)
+            appendPlaceholder = { contents, placeholder, key, mentionAllAllowed ->
+                when (key) {
+                    AT_ALL_PLACEHOLDER -> if (mentionAll && mentionAllAllowed) contents += MessageContent.MentionAll(fallbackText = "")
+                    else appendText(contents, DISABLED_MENTION_ALL_MARKER)
+                    else -> when (val payload = update.payload) {
+                        is DynamicPayload -> appendDynamicPlaceholder(contents, placeholder, key, update, payload, drawImage)
+                        is LivePayload -> appendLivePlaceholder(contents, placeholder, key, update, payload, drawImage)
+                    }
                 }
             },
         )
@@ -46,7 +55,7 @@ public class PushTemplateRenderer {
         template: String,
         update: SourceUpdate,
         splitConversation: Boolean,
-        appendPlaceholder: (MutableList<MessageContent>, String, String) -> Unit,
+        appendPlaceholder: (MutableList<MessageContent>, String, String, Boolean) -> Unit,
     ): List<MessageBatch> {
         val batches = mutableListOf<MessageBatch>()
         val current = mutableListOf<MessageContent>()
@@ -83,7 +92,7 @@ public class PushTemplateRenderer {
         template: String,
         splitConversation: Boolean,
         flush: () -> Unit,
-        appendPlaceholder: (MutableList<MessageContent>, String, String) -> Unit,
+        appendPlaceholder: (MutableList<MessageContent>, String, String, Boolean) -> Unit,
     ) {
         if (!splitConversation) {
             appendRenderedFragment(contents, template, appendPlaceholder)
@@ -99,20 +108,20 @@ public class PushTemplateRenderer {
     private fun appendRenderedFragment(
         contents: MutableList<MessageContent>,
         template: String,
-        appendPlaceholder: (MutableList<MessageContent>, String, String) -> Unit,
+        appendPlaceholder: (MutableList<MessageContent>, String, String, Boolean) -> Unit,
     ) {
-        val rendered = renderBatch(template.replace(LINE_BREAK, "\n"), appendPlaceholder)
+        val rendered = renderBatch(template.replace(LINE_BREAK, "\n"), mentionAllAllowed = true, appendPlaceholder)
         contents += rendered.content
     }
 
     private fun renderForwardContent(
         template: String,
         update: SourceUpdate,
-        appendPlaceholder: (MutableList<MessageContent>, String, String) -> Unit,
+        appendPlaceholder: (MutableList<MessageContent>, String, String, Boolean) -> Unit,
     ): MessageContent.Forward? {
         val nodes = template.split(CHAIN_SEPARATOR)
             .mapNotNull { nodeTemplate ->
-                renderBatch(nodeTemplate.replace(LINE_BREAK, "\n"), appendPlaceholder)
+                renderBatch(nodeTemplate.replace(LINE_BREAK, "\n"), mentionAllAllowed = false, appendPlaceholder)
                     .normalizedOrNull()
                     ?.let { batch ->
                         ForwardNode(
@@ -139,14 +148,15 @@ public class PushTemplateRenderer {
 
     private fun renderBatch(
         template: String,
-        appendPlaceholder: (MutableList<MessageContent>, String, String) -> Unit,
+        mentionAllAllowed: Boolean,
+        appendPlaceholder: (MutableList<MessageContent>, String, String, Boolean) -> Unit,
     ): MessageBatch {
         val contents = mutableListOf<MessageContent>()
         var currentIndex = 0
 
         PLACEHOLDER_REGEX.findAll(template).forEach { match ->
             appendText(contents, template.substring(currentIndex, match.range.first))
-            appendPlaceholder(contents, match.value, match.groupValues[1])
+            appendPlaceholder(contents, match.value, match.groupValues[1], mentionAllAllowed)
             currentIndex = match.range.last + 1
         }
         appendText(contents, template.substring(currentIndex))
@@ -375,9 +385,36 @@ public class PushTemplateRenderer {
 
     private fun MessageBatch.normalizedOrNull(): MessageBatch? {
         val normalized = content
+            .removeDisabledMentionAllPlaceholder()
             .trimBoundaryText()
             .filterNot { it is MessageContent.Text && it.fallbackText.isEmpty() }
         return if (normalized.isEmpty()) null else MessageBatch(normalized)
+    }
+
+    private fun List<MessageContent>.removeDisabledMentionAllPlaceholder(): List<MessageContent> {
+        if (none { it is MessageContent.Text && DISABLED_MENTION_ALL_MARKER in it.fallbackText }) return this
+        return map { content ->
+            if (content is MessageContent.Text) {
+                content.copy(fallbackText = content.fallbackText.removeDisabledMentionAllPlaceholder())
+            } else {
+                content
+            }
+        }
+    }
+
+    private fun String.removeDisabledMentionAllPlaceholder(): String {
+        if (DISABLED_MENTION_ALL_MARKER !in this) return this
+        return replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .split('\n')
+            .mapNotNull { line ->
+                if (DISABLED_MENTION_ALL_MARKER !in line) return@mapNotNull line
+                val cleaned = DISABLED_MENTION_ALL_MARKER_REGEX
+                    .replace(line, " ")
+                    .trim()
+                cleaned.takeIf { it.isNotBlank() }
+            }
+            .joinToString("\n")
     }
 
     private fun List<MessageContent>.trimBoundaryText(): List<MessageContent> {
@@ -398,6 +435,14 @@ public class PushTemplateRenderer {
     }
 
     public companion object {
+        public fun hasMentionAllPlaceholder(template: String): Boolean {
+            return parseTemplateSegments(normalizeTemplateEscapes(template))
+                .filterIsInstance<TemplateSegment.Text>()
+                .any { segment ->
+                    PLACEHOLDER_REGEX.findAll(segment.value).any { it.groupValues[1] == AT_ALL_PLACEHOLDER }
+                }
+        }
+
         public fun validateForwardBlockSyntax(template: String) {
             parseTemplateSegments(normalizeTemplateEscapes(template))
         }
@@ -446,6 +491,9 @@ public class PushTemplateRenderer {
         }
 
         private const val DRAW_PLACEHOLDER: String = "{draw}"
+        private const val AT_ALL_PLACEHOLDER: String = "atAll"
+        private const val DISABLED_MENTION_ALL_MARKER: String = "\u0000PUSH_TEMPLATE_DISABLED_AT_ALL\u0000"
+        private val DISABLED_MENTION_ALL_MARKER_REGEX: Regex = Regex("[ \\t]*${Regex.escape(DISABLED_MENTION_ALL_MARKER)}[ \\t]*")
         private const val FORWARD_START: String = "{>>}"
         private const val FORWARD_END: String = "{<<}"
         private const val LINE_BREAK: String = "\\n"

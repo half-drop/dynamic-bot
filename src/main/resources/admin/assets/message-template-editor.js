@@ -3,6 +3,7 @@ export function createMessageTemplateEditor(deps) {
   const attr = deps.attr;
   const doc = deps.document || document;
   const dropRangeRects = new WeakMap();
+  const MENTION_ALL_TOKEN = "{atAll}";
   let activeContent = null;
 
   function editorHtml(options) {
@@ -93,7 +94,10 @@ export function createMessageTemplateEditor(deps) {
           applySource(sourceTemplateValue(sourceInput.value));
           return;
         }
-        insertTokenIntoContent(activeContent || ensureFirstContent(blockList, kind), button.dataset.templateToken || "", kind);
+        const token = button.dataset.templateToken || "";
+        const content = activeContent || ensureFirstContent(blockList, kind);
+        if (!canInsertTokenIntoContent(content, token)) return;
+        insertTokenIntoContent(content, token, kind);
         commitBuilder();
       });
       button.addEventListener("dragstart", event => {
@@ -195,18 +199,31 @@ export function createMessageTemplateEditor(deps) {
       if (!content) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = draggingChip ? "move" : "copy";
+      const token = draggedTemplateToken(event, draggingChip);
       deleteArmed = false;
       root.classList.remove("is-chip-delete-ready");
       blockList.querySelectorAll(".message-template-content-editor.is-dragging").forEach(item => {
         if (item !== content) item.classList.remove("is-dragging");
       });
+      blockList.querySelectorAll(".message-template-content-editor.is-drop-disabled").forEach(item => {
+        if (item !== content) item.classList.remove("is-drop-disabled");
+      });
+      if (!canInsertTokenIntoContent(content, token)) {
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+        content.classList.add("is-drop-disabled");
+        removeDropCaret(blockList);
+        return;
+      }
+      if (event.dataTransfer) event.dataTransfer.dropEffect = draggingChip ? "move" : "copy";
       content.classList.add("is-dragging");
       showDropCaret(blockList, content, event);
     });
     blockList.addEventListener("dragleave", event => {
       const content = event.target.closest?.("[data-template-content]");
-      if (content && !content.contains(event.relatedTarget)) content.classList.remove("is-dragging");
+      if (content && !content.contains(event.relatedTarget)) {
+        content.classList.remove("is-dragging");
+        content.classList.remove("is-drop-disabled");
+      }
     });
     blockList.addEventListener("drop", event => {
       const content = event.target.closest?.("[data-template-content]");
@@ -216,6 +233,11 @@ export function createMessageTemplateEditor(deps) {
       content.classList.remove("is-dragging");
       activeContent = content;
       const token = event.dataTransfer?.getData("application/x-message-template-token") || event.dataTransfer?.getData("text/plain") || draggingChip?.dataset?.templateToken || "";
+      if (!canInsertTokenIntoContent(content, token)) {
+        content.classList.remove("is-drop-disabled");
+        clearDragState(root, blockList);
+        return;
+      }
       placeCaretAtDropPosition(blockList, content, event);
       insertTokenIntoContent(content, token, kind);
       if (draggingChip && draggingChip.isConnected) draggingChip.remove();
@@ -266,7 +288,7 @@ export function createMessageTemplateEditor(deps) {
           ${blockControlButtonsHtml()}
         </div>
       </div>
-      ${contentEditorHtml(block.text, kind, "消息内容")}
+      ${contentEditorHtml(block.text, kind, "消息内容", true)}
     </section>`;
   }
 
@@ -296,12 +318,12 @@ export function createMessageTemplateEditor(deps) {
           <button type="button" class="compact message-template-delete-button" data-template-node-action="delete">删除</button>
         </div>
       </div>
-      ${contentEditorHtml(node.text, kind, "节点内容")}
+      ${contentEditorHtml(node.text, kind, "节点内容", false)}
     </div>`;
   }
 
-  function contentEditorHtml(source, kind, placeholder) {
-    return `<div class="message-template-content-editor" contenteditable="true" spellcheck="false" data-template-content data-placeholder="${attr(placeholder)}">${renderEditableContent(source, kind)}</div>`;
+  function contentEditorHtml(source, kind, placeholder, allowMentionAll) {
+    return `<div class="message-template-content-editor" contenteditable="true" spellcheck="false" data-template-content data-template-allow-at-all="${allowMentionAll ? "true" : "false"}" data-placeholder="${attr(placeholder)}">${renderEditableContent(source, kind, allowMentionAll)}</div>`;
   }
 
   function blockControlButtonsHtml() {
@@ -311,14 +333,14 @@ export function createMessageTemplateEditor(deps) {
       <button type="button" class="compact message-template-delete-button" data-template-block-action="delete">删除</button>`;
   }
 
-  function renderEditableContent(source, kind) {
+  function renderEditableContent(source, kind, allowMentionAll = true) {
     const tokenRegex = /(?:\\n|\{[a-zA-Z0-9_]+\})/g;
     const value = String(source || "");
     let html = "";
     let index = 0;
     value.replace(tokenRegex, (match, offset) => {
       html += renderEditableText(value.slice(index, offset));
-      html += match === "\\n" ? "<br>" : fieldChipHtml(match, kind);
+      html += match === "\\n" ? "<br>" : fieldChipHtml(match, kind, allowMentionAll);
       index = offset + match.length;
       return match;
     });
@@ -338,6 +360,7 @@ export function createMessageTemplateEditor(deps) {
     root?.classList?.remove("is-chip-delete-ready");
     blockList?.querySelectorAll(".message-template-field-chip.is-moving").forEach(item => item.classList.remove("is-moving"));
     blockList?.querySelectorAll(".message-template-content-editor.is-dragging").forEach(item => item.classList.remove("is-dragging"));
+    blockList?.querySelectorAll(".message-template-content-editor.is-drop-disabled").forEach(item => item.classList.remove("is-drop-disabled"));
     removeDropCaret(blockList);
   }
 
@@ -602,8 +625,11 @@ export function createMessageTemplateEditor(deps) {
     return esc(String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\\n/g, "\n")).replace(/\n/g, "<br>");
   }
 
-  function fieldChipHtml(token, kind) {
-    return `<span class="message-template-field-chip" contenteditable="false" draggable="true" data-template-token="${attr(token)}" title="${attr(token)}">${esc(templateTokenTitle(token, kind))}</span>`;
+  function fieldChipHtml(token, kind, allowMentionAll = true) {
+    const disabled = token === MENTION_ALL_TOKEN && !allowMentionAll;
+    const className = `message-template-field-chip${disabled ? " is-disabled" : ""}`;
+    const title = disabled ? "@全体不能放在合并转发节点中，发送时会忽略。" : token;
+    return `<span class="${className}" contenteditable="false" draggable="true" data-template-token="${attr(token)}" title="${attr(title)}">${esc(templateTokenTitle(token, kind))}</span>`;
   }
 
   function updateEditorState(blockList) {
@@ -734,6 +760,15 @@ export function createMessageTemplateEditor(deps) {
     insertSourceIntoContent(content, token, kind);
   }
 
+  function canInsertTokenIntoContent(content, token) {
+    if (token !== MENTION_ALL_TOKEN) return true;
+    return content?.dataset?.templateAllowAtAll !== "false";
+  }
+
+  function draggedTemplateToken(event, draggingChip) {
+    return event.dataTransfer?.getData("application/x-message-template-token") || event.dataTransfer?.getData("text/plain") || draggingChip?.dataset?.templateToken || "";
+  }
+
   function insertSourceIntoContent(content, source, kind) {
     if (!content || !source) return;
     content.focus();
@@ -745,7 +780,7 @@ export function createMessageTemplateEditor(deps) {
       range.collapse(false);
     }
     range.deleteContents();
-    const fragment = fragmentFromSource(source, kind);
+    const fragment = fragmentFromSource(source, kind, content.dataset?.templateAllowAtAll !== "false");
     const lastNode = fragment.lastChild;
     range.insertNode(fragment);
     if (lastNode) {
@@ -756,9 +791,9 @@ export function createMessageTemplateEditor(deps) {
     }
   }
 
-  function fragmentFromSource(source, kind) {
+  function fragmentFromSource(source, kind, allowMentionAll = true) {
     const template = doc.createElement("template");
-    template.innerHTML = renderEditableContent(source, kind);
+    template.innerHTML = renderEditableContent(source, kind, allowMentionAll);
     return template.content;
   }
 
@@ -803,7 +838,17 @@ export function createMessageTemplateEditor(deps) {
   }
 
   function contentSource(content) {
-    return encodeLineBreaks(readContentText(content).replace(/\n+$/g, "")).replace(/\r/g, "");
+    const allowMentionAll = content?.dataset?.templateAllowAtAll !== "false";
+    const text = readContentText(content)
+      .replace(/\n+$/g, "")
+      .replace(/\r/g, "");
+    return encodeLineBreaks(allowMentionAll ? text : removeMentionAllToken(text));
+  }
+
+  function removeMentionAllToken(value) {
+    return String(value || "")
+      .split(MENTION_ALL_TOKEN).join("")
+      .replace(/\n{3,}/g, "\n\n");
   }
 
   function hasTemplateContent(source) {
@@ -854,7 +899,10 @@ export function createMessageTemplateEditor(deps) {
   function tokenPaletteHtml(kind) {
     return placeholderGroups(kind).map(group => `
       <div class="message-template-token-group">
-        <span class="message-template-token-group-title">${esc(group.title)}</span>
+        <div class="message-template-token-group-head">
+          <span class="message-template-token-group-title">${esc(group.title)}</span>
+          ${group.description ? `<span class="message-template-token-group-desc">${esc(group.description)}</span>` : ""}
+        </div>
         <div class="message-template-token-bar">
           ${group.items.map(item => tokenButtonHtml(item)).join("")}
         </div>
@@ -873,9 +921,11 @@ export function createMessageTemplateEditor(deps) {
       ["media", "媒体", item => ["{draw}", "{images}", "{cover}", "{video}"].includes(item.value)],
       ["identity", "对象", item => ["{name}", "{uid}", "{did}", "{rid}", "{id}", "{kind}"].includes(item.value)],
       ["content", "内容", item => ["{title}", "{content}", "{time}", "{area}", "{startTime}", "{endTime}", "{duration}", "{stats}", "{link}", "{links}", "{size}"].includes(item.value)],
+      ["notify", "通知", item => ["{atAll}"].includes(item.value)],
     ];
-    return groups.map(([, title, match]) => ({
+    return groups.map(([key, title, match]) => ({
       title,
+      description: key === "notify" ? "仅对已启用 @全体的群目标生效；未配置时会默认追加到消息末尾。" : "",
       items: items.filter(match),
     })).filter(group => group.items.length);
   }
@@ -885,6 +935,7 @@ export function createMessageTemplateEditor(deps) {
       { value: "{name}", label: "{name}", title: "发布者名称" },
       { value: "{uid}", label: "{uid}", title: "发布者 ID" },
       { value: "{link}", label: "{link}", title: "主链接" },
+      { value: "{atAll}", label: "{atAll}", title: "@全体" },
     ];
     if (kind && kind.startsWith("LINK_")) {
       return [
@@ -1009,7 +1060,7 @@ export function createMessageTemplateEditor(deps) {
       if (segment.type === "forward") {
         flush();
         const nodes = segment.value.split("\\r")
-          .map(fragment => renderMessageTemplateFragment(fragment.replace(/\\n/g, "\n"), kind).trim())
+          .map(fragment => renderMessageTemplateFragment(fragment.replace(/\\n/g, "\n"), kind, false).trim())
           .filter(Boolean);
         if (nodes.length) batches.push({ type: "forward", nodes });
         return;
@@ -1017,16 +1068,17 @@ export function createMessageTemplateEditor(deps) {
       const fragments = kind === "LIVE_ENDED" ? [segment.value] : segment.value.split("\\r");
       fragments.forEach((fragment, index) => {
         if (index > 0) flush();
-        current += renderMessageTemplateFragment(fragment.replace(/\\n/g, "\n"), kind);
+        current += renderMessageTemplateFragment(fragment.replace(/\\n/g, "\n"), kind, true);
       });
     });
     flush();
     return batches;
   }
 
-  function renderMessageTemplateFragment(fragment, kind) {
+  function renderMessageTemplateFragment(fragment, kind, allowMentionAll = true) {
     const sample = messageTemplateSampleValues(kind);
     return String(fragment || "").replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => {
+      if (key === "atAll" && !allowMentionAll) return "";
       return sample[key] === undefined ? match : sample[key];
     });
   }
@@ -1113,6 +1165,7 @@ export function createMessageTemplateEditor(deps) {
         area: "科技 / 编程",
         cover: "【直播封面】",
         link: "https://live.bilibili.com/230001",
+        atAll: "@全体",
       };
     }
     if (kind === "LIVE_ENDED") {
@@ -1126,6 +1179,7 @@ export function createMessageTemplateEditor(deps) {
         endTime: "2026年06月16日 22:04:00",
         duration: "1h 34m",
         link: "https://live.bilibili.com/230001",
+        atAll: "@全体",
       };
     }
     return {
@@ -1138,6 +1192,7 @@ export function createMessageTemplateEditor(deps) {
       images: "【图片 1】\n【图片 2】",
       link: "https://t.bilibili.com/987654321",
       links: "https://example.com/post\nhttps://example.com/detail",
+      atAll: "@全体",
     };
   }
 

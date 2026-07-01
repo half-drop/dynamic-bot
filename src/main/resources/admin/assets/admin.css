@@ -5881,6 +5881,11 @@
       caret-color: #14b8a6;
       box-shadow: inset 0 0 0 1px rgba(20, 184, 166, 0.18);
     }
+    .message-template-content-editor.is-drop-disabled {
+      border-color: #f4b4b4;
+      background: #fff5f5;
+      box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.12);
+    }
     .message-template-drop-caret {
       position: absolute;
       z-index: 8;
@@ -5913,6 +5918,13 @@
     }
     .message-template-field-chip.is-moving {
       opacity: 0;
+    }
+    .message-template-field-chip.is-disabled {
+      border-color: #e5e7eb;
+      background: #f3f4f6;
+      color: #8a94a6;
+      cursor: not-allowed;
+      text-decoration: line-through;
     }
     .message-template-forward-editor-nodes {
       min-width: 0;
@@ -5986,6 +5998,18 @@
       color: var(--muted);
       font-size: 12px;
       font-weight: 850;
+    }
+    .message-template-token-group-head {
+      min-width: 0;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .message-template-token-group-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
     }
     .message-template-token-bar {
       min-width: 0;

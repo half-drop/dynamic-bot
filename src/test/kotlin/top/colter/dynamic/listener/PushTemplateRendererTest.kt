@@ -276,6 +276,24 @@ class PushTemplateRendererTest {
     }
 
     @Test
+    fun shouldIgnoreMentionAllInsideMergedForwardBlock() {
+        val chains = renderer.render(
+            "head{>>}node {atAll}{<<}tail",
+            demoDynamic(),
+            drawImage = null,
+            mentionAll = true,
+        )
+
+        assertEquals(3, chains.size)
+        assertEquals("head", chains[0].content.single().fallbackText)
+        val forward = assertIs<MessageContent.Forward>(chains[1].content.single())
+        assertEquals("node", forward.nodes.single().batches.single().content.single().fallbackText)
+        assertTrue(forward.nodes.single().batches.single().content.none { it is MessageContent.MentionAll })
+        assertEquals("tail", chains[2].content.single().fallbackText)
+        assertFalse(PushTemplateRenderer.hasMentionAllPlaceholder("head{>>}node {atAll}{<<}tail"))
+    }
+
+    @Test
     fun shouldRejectInvalidMergedForwardBlocks() {
         assertFailsWith<IllegalArgumentException> {
             PushTemplateRenderer.validateForwardBlockSyntax("{>>}missing end")

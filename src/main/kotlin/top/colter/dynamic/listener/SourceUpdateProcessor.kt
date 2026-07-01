@@ -242,13 +242,19 @@ public class SourceUpdateProcessor(
         template: String,
         update: SourceUpdate,
         storedPublisher: Publisher?,
-    ): List<MessageBatch> {
+    ): RenderedPushBatches {
         val drawImage = if (templateRenderer.requiresDraw(template, update)) {
             renderImage(update, storedPublisher)
         } else {
             null
         }
-        return templateRenderer.render(template, update, drawImage)
+        val normalBatches = templateRenderer.render(template, update, drawImage)
+        val mentionAllBatches = if (PushTemplateRenderer.hasMentionAllPlaceholder(template)) {
+            templateRenderer.render(template, update, drawImage, mentionAll = true)
+        } else {
+            normalBatches.withMentionAllAtTail()
+        }
+        return RenderedPushBatches(normal = normalBatches, mentionAll = mentionAllBatches)
     }
 
     private suspend fun renderImage(update: SourceUpdate, storedPublisher: Publisher?): MediaRef? {
@@ -277,27 +283,33 @@ public class SourceUpdateProcessor(
         sourcePlugin: String,
         update: SourceUpdate,
         targets: List<DeliveryTarget>,
-        batches: List<MessageBatch>,
+        batches: RenderedPushBatches,
         skipReason: String,
         messageIdNonce: String? = null,
         correlationId: String? = null,
         requireActiveTarget: Boolean = true,
         isLinkResult: Boolean = false,
     ): SourceUpdatePublishResult {
-        if (batches.isEmpty()) {
+        val (mentionAllTargets, normalTargets) = if (isLinkResult) {
+            emptyList<DeliveryTarget>() to targets
+        } else {
+            targets.partition { it.shouldMentionAll(update) }
+        }
+        if ((normalTargets.isEmpty() || batches.normal.isEmpty()) &&
+            (mentionAllTargets.isEmpty() || batches.mentionAll.isEmpty())
+        ) {
             logger.warn { "跳过来源更新：$skipReason，渲染后的消息为空" }
             return SourceUpdatePublishResult.ignored("渲染后的消息为空")
         }
 
         SourceUpdateSnapshotRepository.upsert(sourcePlugin, update)
 
-        val (mentionAllTargets, normalTargets) = targets.partition { it.shouldMentionAll(update) }
         val results = listOfNotNull(
             publishMessageVariant(
                 sourcePlugin,
                 update,
                 normalTargets,
-                batches,
+                batches.normal,
                 "default",
                 messageIdNonce,
                 correlationId,
@@ -308,7 +320,7 @@ public class SourceUpdateProcessor(
                 sourcePlugin,
                 update,
                 mentionAllTargets,
-                batches.withMentionAllAtTail(),
+                batches.mentionAll,
                 "mention_all",
                 messageIdNonce,
                 correlationId,
@@ -343,7 +355,7 @@ public class SourceUpdateProcessor(
         requireActiveTarget: Boolean = true,
         isLinkResult: Boolean = false,
     ): OutboundMessagePublishResult? {
-        if (targets.isEmpty()) return null
+        if (targets.isEmpty() || batches.isEmpty()) return null
 
         val result = outboundMessageService.publish(
             OutboundMessagePublishRequest(
@@ -418,9 +430,27 @@ public class SourceUpdateProcessor(
         val result = toMutableList()
         val last = result.last()
         result[result.lastIndex] = last.copy(
-            content = last.content + MessageContent.MentionAll(fallbackText = ""),
+            content = last.content.withMentionAllOnNewLine(),
         )
         return result
+    }
+
+    private fun List<MessageContent>.withMentionAllOnNewLine(): List<MessageContent> {
+        val result = toMutableList()
+        when (val last = result.lastOrNull()) {
+            is MessageContent.Text -> {
+                result[result.lastIndex] = last.copy(fallbackText = last.fallbackText.ensureTrailingLineBreak())
+            }
+            null -> Unit
+            else -> result += MessageContent.Text("\n")
+        }
+        result += MessageContent.MentionAll(fallbackText = "")
+        return result
+    }
+
+    private fun String.ensureTrailingLineBreak(): String {
+        if (endsWith('\n') || endsWith('\r')) return this
+        return "$this\n"
     }
 
     private fun List<top.colter.dynamic.core.data.TargetAddress>.targetSummary(): String {
@@ -432,6 +462,11 @@ public class SourceUpdateProcessor(
         val address: TargetAddress,
         val subscriber: Subscriber?,
         val subscription: top.colter.dynamic.core.data.Subscription?,
+    )
+
+    private data class RenderedPushBatches(
+        val normal: List<MessageBatch>,
+        val mentionAll: List<MessageBatch>,
     )
 
     private companion object {

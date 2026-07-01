@@ -138,7 +138,7 @@ class SourceUpdateProcessorTest {
         )
         val started = withTimeout(3_000) { startedReceived.await() }
         val startedContents = started.message.batches.single().content
-        assertEquals("started Live title", startedContents.first().fallbackText)
+        assertEquals("started Live title\n", startedContents.first().fallbackText)
         assertTrue(startedContents.last() is MessageContent.MentionAll)
 
         val endedReceived = captureMessageEvent(eventBus)
