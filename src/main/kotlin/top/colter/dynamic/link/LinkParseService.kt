@@ -27,6 +27,7 @@ import top.colter.dynamic.core.data.OutboundMessageKind
 import top.colter.dynamic.core.data.SourceUpdate
 import top.colter.dynamic.core.data.TargetAddress
 import top.colter.dynamic.core.event.PublisherPersistenceMode
+import top.colter.dynamic.core.event.SourceUpdateDeliveryTags
 import top.colter.dynamic.core.event.SourceUpdatePublishRequest
 import top.colter.dynamic.core.event.SourceUpdatePublishResult
 import top.colter.dynamic.core.event.SourceUpdatePublisher
@@ -47,7 +48,7 @@ import top.colter.dynamic.message.OutboundMessageService
 import top.colter.dynamic.repository.IncomingMessageAuditRepository
 import top.colter.dynamic.repository.IncomingProcessingWriteRequest
 
-internal const val LINK_PARSE_EVENT_LABEL: String = "link-parse"
+internal const val LINK_PARSE_EVENT_LABEL: String = SourceUpdateDeliveryTags.LINK_PREVIEW
 internal const val LINK_PARSE_EVENT_SOURCE: String = "main-link-parser"
 private const val LINK_RESULT_RETENTION_SECONDS: Long = 7L * 24L * 60L * 60L
 

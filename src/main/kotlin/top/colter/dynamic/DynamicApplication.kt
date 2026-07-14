@@ -35,6 +35,7 @@ import top.colter.dynamic.core.event.SourceUpdatePublishRequest
 import top.colter.dynamic.core.event.SourceUpdatePublishResult
 import top.colter.dynamic.core.event.SourceUpdatePublisher
 import top.colter.dynamic.plugin.PluginManager
+import top.colter.dynamic.publisher.PublisherLatestUpdateService
 import top.colter.dynamic.plugin.PluginState
 import top.colter.dynamic.core.plugin.AccountRoutedMessageSinkPlugin
 import top.colter.dynamic.core.plugin.MessageSinkRouteState
@@ -274,6 +275,10 @@ public object DynamicApplication : CoroutineScope {
             progressMessenger = linkParseProgressMessenger,
             backgroundScope = this,
         )
+        val latestPublisherUpdateService = PublisherLatestUpdateService(
+            providerResolver = pluginManager::findPublisherLatestUpdateProvider,
+            sourceUpdatePublisher = sourceUpdatePublisher,
+        )
         incomingMessagePipeline = IncomingMessagePipeline(
             configProvider = configStore::current,
             linkParseService = linkParseService,
@@ -287,6 +292,7 @@ public object DynamicApplication : CoroutineScope {
             CommandListener(
                 configProvider = configStore::current,
                 linkParseService = linkParseService,
+                latestPublisherUpdateService = latestPublisherUpdateService,
                 publisherLookupResolver = { platformId -> pluginManager.findPublisherLookupPlugin(platformId) },
                 publisherFollowResolver = { platformId -> pluginManager.findPublisherFollowPlugin(platformId) },
                 publisherLoginResolver = { platformId -> pluginManager.findPublisherLoginProvider(platformId) },

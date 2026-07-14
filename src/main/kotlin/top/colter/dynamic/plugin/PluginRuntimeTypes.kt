@@ -5,6 +5,7 @@ import top.colter.dynamic.core.plugin.PluginDescriptor
 public enum class PluginCapability {
     PUBLISHER_SOURCE,
     PUBLISHER_LOOKUP,
+    PUBLISHER_LATEST_UPDATE,
     PUBLISHER_FOLLOW,
     PUBLISHER_LOGIN,
     MESSAGE_SINK,

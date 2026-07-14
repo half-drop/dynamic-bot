@@ -17,6 +17,7 @@ import top.colter.dynamic.core.data.CommandContext
 import top.colter.dynamic.core.data.CommandRole
 import top.colter.dynamic.core.data.CommandStatus
 import top.colter.dynamic.core.data.DeliveryStatus
+import top.colter.dynamic.core.data.DynamicPayload
 import top.colter.dynamic.core.data.DynamicBlockKind
 import top.colter.dynamic.core.data.FilterCondition
 import top.colter.dynamic.core.data.Message
@@ -25,8 +26,11 @@ import top.colter.dynamic.core.data.MessageContent
 import top.colter.dynamic.core.data.PlatformId
 import top.colter.dynamic.core.data.PublisherInfo
 import top.colter.dynamic.core.data.PublisherKey
+import top.colter.dynamic.core.data.SourceEventType
+import top.colter.dynamic.core.data.SourceUpdate
 import top.colter.dynamic.core.data.TargetAddress
 import top.colter.dynamic.core.data.TargetKind
+import top.colter.dynamic.core.data.UpdateKey
 import top.colter.dynamic.core.plugin.PluginDescriptor
 import top.colter.dynamic.core.task.TaskSchedule
 import top.colter.dynamic.core.task.TaskSnapshot
@@ -41,6 +45,13 @@ import top.colter.dynamic.core.plugin.FollowActionStatus
 import top.colter.dynamic.core.plugin.FollowState
 import top.colter.dynamic.core.plugin.PublisherFollowPlugin
 import top.colter.dynamic.core.plugin.PublisherLookupPlugin
+import top.colter.dynamic.core.plugin.PublisherLatestUpdateProvider
+import top.colter.dynamic.core.plugin.PublisherLatestUpdateRequest
+import top.colter.dynamic.core.plugin.PublisherLatestUpdateResult
+import top.colter.dynamic.core.event.PublisherPersistenceMode
+import top.colter.dynamic.core.event.SourceUpdateDeliveryTags
+import top.colter.dynamic.core.event.SourceUpdatePublishResult
+import top.colter.dynamic.core.event.SourceUpdatePublisher
 import top.colter.dynamic.draw.PublisherThemeInitializer
 import top.colter.dynamic.repository.DynamicFilterRuleRepository
 import top.colter.dynamic.repository.LinkParseTargetConfigRepository
@@ -54,8 +65,43 @@ import top.colter.dynamic.testPublisherInfo
 import top.colter.dynamic.plugin.PluginInfo
 import top.colter.dynamic.plugin.PluginState
 import top.colter.dynamic.plugin.PluginTaskInfo
+import top.colter.dynamic.publisher.PublisherLatestUpdateService
 
 class CommandListenerTest {
+    @Test
+    fun latestShouldDispatchPlatformUpdateAsManualPreview() = runBlocking {
+        initDb("command-latest")
+        val eventBus = EventBus()
+        val provider = FakeLatestUpdateProvider()
+        val requests = mutableListOf<top.colter.dynamic.core.event.SourceUpdatePublishRequest>()
+        val service = PublisherLatestUpdateService(
+            providerResolver = { platformId -> provider.takeIf { it.platformId.value == platformId } },
+            sourceUpdatePublisher = SourceUpdatePublisher { request ->
+                requests += request
+                SourceUpdatePublishResult.enqueued(1)
+            },
+        )
+        val listener = CommandListener(
+            publisherLookupResolver = { null },
+            latestPublisherUpdateService = service,
+            config = publicUserConfig(),
+            commandRegistry = CommandRegistry(),
+            eventBus = eventBus,
+            publisherThemeInitializer = PublisherThemeInitializer { _, _ -> },
+        )
+
+        val result = dispatch(eventBus, listener, commandEvent("/db new bilibili https://space.bilibili.com/123"))
+
+        assertEquals(CommandStatus.SUCCESS, result.status)
+        assertTrue(renderMessage(result).contains("已提交 demo-up 的最新动态"))
+        assertEquals(listOf("https://space.bilibili.com/123"), provider.inputs)
+        val request = requests.single()
+        assertEquals(SourceUpdateDeliveryTags.MANUAL_QUERY, request.deliveryTag)
+        assertEquals(PublisherPersistenceMode.READ_ONLY, request.publisherPersistenceMode)
+        assertEquals("trace", request.correlationId)
+        assertEquals("100", request.deliveryTargetAddress?.externalId)
+    }
+
     @Test
     fun subscribeShouldCreatePublisherSubscriberAndSubscription() = runBlocking {
         initDb("command-subscribe")
@@ -522,6 +568,30 @@ class CommandListenerTest {
             return testPublisherInfo(
                 key = PublisherKey.of(platformId = platformId.value, externalId = userId),
                 name = "demo-up",
+            )
+        }
+    }
+
+    private class FakeLatestUpdateProvider : PublisherLatestUpdateProvider {
+        override val platformId: PlatformId = PlatformId.of("bilibili")
+        val inputs: MutableList<String> = mutableListOf()
+
+        override suspend fun fetchLatestPublisherUpdate(
+            request: PublisherLatestUpdateRequest,
+        ): PublisherLatestUpdateResult {
+            inputs += request.publisherInput
+            val publisher = testPublisherInfo(
+                key = PublisherKey.of(platformId = platformId.value, externalId = "123"),
+                name = "demo-up",
+            )
+            return PublisherLatestUpdateResult.Found(
+                SourceUpdate(
+                    key = UpdateKey(publisher.key, SourceEventType.DYNAMIC_CREATED, "dynamic-1"),
+                    publisher = publisher,
+                    occurredAtEpochSeconds = 1_000,
+                    link = "https://t.bilibili.com/dynamic-1",
+                    payload = DynamicPayload(),
+                ),
             )
         }
     }

@@ -45,6 +45,7 @@ import top.colter.dynamic.event.Listener
 import top.colter.dynamic.event.MessageEvent
 import top.colter.dynamic.core.event.SourceUpdatePublishRequest
 import top.colter.dynamic.core.event.SourceUpdatePublishStatus
+import top.colter.dynamic.core.event.SourceUpdateDeliveryTags
 import top.colter.dynamic.core.plugin.MessageSendResult
 import top.colter.dynamic.draw.DynamicDrawService
 import top.colter.dynamic.link.LINK_PARSE_EVENT_LABEL
@@ -170,6 +171,44 @@ class SourceUpdateDynamicTest {
         assertNotEquals(firstEvent.message.id, secondEvent.message.id)
         assertTrue(firstEvent.message.id.contains(":default:link-parse:"))
         assertTrue(secondEvent.message.id.contains(":default:link-parse:"))
+    }
+
+    @Test
+    fun shouldDeliverRepeatedManualQueryWithoutSubscriptionOrMentionAll() = runBlocking {
+        initDb("dynamic-listener-manual-query-repeat")
+        val eventBus = EventBus()
+        val publisher = createPublisher()
+        val subscriber = createSubscriber()
+        SubscriberRepository.replace(subscriber.copy(state = SubscriberState.DELIVERY_PAUSED))
+        val pausedSubscriber = assertNotNull(SubscriberRepository.findByAddress(subscriber.address))
+        val listener = SourceUpdateProcessor(
+            config = MainDynamicConfig(templates = PushTemplates(dynamic = "通知\n{atAll}\n{name}")),
+            eventBus = eventBus,
+            outboundMessageService = successfulOutboundMessageService(),
+        )
+        val received = captureMessageEvents(eventBus)
+        val request = SourceUpdatePublishRequest(
+            sourcePlugin = "test",
+            deliveryTarget = pausedSubscriber,
+            deliveryTag = SourceUpdateDeliveryTags.MANUAL_QUERY,
+            update = demoDynamic(publisher),
+        )
+
+        val first = listener.process(request)
+        val firstEvent = withTimeout(3_000) { received.receive() }
+        val second = listener.process(request)
+        val secondEvent = withTimeout(3_000) { received.receive() }
+
+        assertEquals(SourceUpdatePublishStatus.ENQUEUED, first.status)
+        assertEquals(SourceUpdatePublishStatus.ENQUEUED, second.status)
+        assertEquals(OutboundMessageKind.INTERACTION_REPLY, firstEvent.message.kind)
+        assertEquals(MessageRecordPolicyType.TRANSIENT, firstEvent.message.recordPolicy.policyType)
+        assertEquals(false, firstEvent.message.deliveryPolicy.requireActiveTarget)
+        assertTrue(firstEvent.message.id.contains(":default:manual-query:"))
+        assertTrue(secondEvent.message.id.contains(":default:manual-query:"))
+        assertTrue(firstEvent.message.id != secondEvent.message.id)
+        assertTrue(firstEvent.message.batches.flattenContent().none { it is MessageContent.MentionAll })
+        assertTrue(secondEvent.message.batches.flattenContent().none { it is MessageContent.MentionAll })
     }
 
     @Test

@@ -67,6 +67,7 @@ import top.colter.dynamic.core.plugin.PluginDescriptor
 import top.colter.dynamic.core.plugin.PublisherFollowPlugin
 import top.colter.dynamic.core.plugin.PublisherLoginProvider
 import top.colter.dynamic.core.plugin.PublisherLookupPlugin
+import top.colter.dynamic.core.plugin.PublisherLatestUpdateProvider
 import top.colter.dynamic.core.plugin.PublisherSourcePlugin
 import top.colter.dynamic.core.plugin.SourceStateStore
 import top.colter.dynamic.core.plugin.SubscriptionQueryService
@@ -658,6 +659,13 @@ public class PluginManager(
             ?.instance
     }
 
+    public fun findPublisherLatestUpdateProvider(platformId: String): PublisherLatestUpdateProvider? {
+        val normalized = top.colter.dynamic.core.data.PlatformId.of(platformId)
+        return activeExtensionHandles<PublisherLatestUpdateProvider>()
+            .firstOrNull { it.instance.platformId == normalized }
+            ?.instance
+    }
+
     public fun findPublisherFollowPlugin(platformId: String): PublisherFollowPlugin? {
         val normalized = top.colter.dynamic.core.data.PlatformId.of(platformId)
         return activeExtensionHandles<PublisherFollowPlugin>()
@@ -973,6 +981,7 @@ public class PluginManager(
         return buildSet {
             if (instance is PublisherSourcePlugin) add(PluginCapability.PUBLISHER_SOURCE)
             if (instance is PublisherLookupPlugin) add(PluginCapability.PUBLISHER_LOOKUP)
+            if (instance is PublisherLatestUpdateProvider) add(PluginCapability.PUBLISHER_LATEST_UPDATE)
             if (instance is PublisherFollowPlugin) add(PluginCapability.PUBLISHER_FOLLOW)
             if (instance is PublisherLoginProvider) add(PluginCapability.PUBLISHER_LOGIN)
             if (instance is MessageSinkPlugin) add(PluginCapability.MESSAGE_SINK)

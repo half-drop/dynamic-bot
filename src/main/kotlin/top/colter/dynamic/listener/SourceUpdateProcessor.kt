@@ -24,8 +24,10 @@ import top.colter.dynamic.core.data.TargetKind
 import top.colter.dynamic.event.EventBus
 import top.colter.dynamic.event.MessageEvent
 import top.colter.dynamic.core.event.PublisherPersistenceMode
+import top.colter.dynamic.core.event.SourceUpdateDeliveryMode
 import top.colter.dynamic.core.event.SourceUpdatePublishRequest
 import top.colter.dynamic.core.event.SourceUpdatePublishResult
+import top.colter.dynamic.core.event.deliveryMode
 import top.colter.dynamic.core.plugin.OutboundMessagePublishRequest
 import top.colter.dynamic.draw.DefaultDynamicDrawService
 import top.colter.dynamic.draw.DynamicDrawService
@@ -38,7 +40,6 @@ import top.colter.dynamic.repository.SubscriberRepository
 import top.colter.dynamic.repository.SubscriptionRepository
 import top.colter.dynamic.repository.isDeliveryAllowed
 import top.colter.dynamic.core.tools.loggerFor
-import top.colter.dynamic.link.LINK_PARSE_EVENT_LABEL
 import top.colter.dynamic.message.OutboundMessagePublishResult
 import top.colter.dynamic.message.OutboundMessageService
 
@@ -84,7 +85,8 @@ public class SourceUpdateProcessor(
 
     private suspend fun handleDynamic(request: SourceUpdatePublishRequest, update: SourceUpdate): SourceUpdatePublishResult {
         val (normalizedUpdate, storedPublisher) = normalizePublisher(update, request.publisherPersistenceMode)
-        val requireActiveTarget = request.deliveryTag != LINK_PARSE_EVENT_LABEL
+        val deliveryMode = request.deliveryMode
+        val requireActiveTarget = !deliveryMode.isOnDemandPreview
         val targets = resolveTargets(
             target = request.deliveryTarget,
             targetAddress = request.deliveryTargetAddress,
@@ -96,7 +98,7 @@ public class SourceUpdateProcessor(
             return SourceUpdatePublishResult.ignored("没有可投递目标")
         }
 
-        val deliverableTargets = if (request.deliveryTag == LINK_PARSE_EVENT_LABEL) {
+        val deliverableTargets = if (deliveryMode.isOnDemandPreview) {
             targets
         } else {
             applySubscriptionRules(normalizedUpdate, targets.filterSubscribedBefore(normalizedUpdate.occurredAtEpochSeconds))
@@ -116,10 +118,10 @@ public class SourceUpdateProcessor(
             targets = deliverableTargets,
             batches = chain,
             skipReason = "update=${normalizedUpdate.key.stableValue()}",
-            messageIdNonce = request.linkParseMessageIdNonce(),
+            messageIdNonce = request.onDemandPreviewMessageIdNonce(deliveryMode),
             correlationId = request.correlationId,
             requireActiveTarget = requireActiveTarget,
-            isLinkResult = request.deliveryTag == LINK_PARSE_EVENT_LABEL,
+            deliveryMode = deliveryMode,
         )
     }
 
@@ -288,9 +290,9 @@ public class SourceUpdateProcessor(
         messageIdNonce: String? = null,
         correlationId: String? = null,
         requireActiveTarget: Boolean = true,
-        isLinkResult: Boolean = false,
+        deliveryMode: SourceUpdateDeliveryMode = SourceUpdateDeliveryMode.SUBSCRIPTION,
     ): SourceUpdatePublishResult {
-        val (mentionAllTargets, normalTargets) = if (isLinkResult) {
+        val (mentionAllTargets, normalTargets) = if (deliveryMode.isOnDemandPreview) {
             emptyList<DeliveryTarget>() to targets
         } else {
             targets.partition { it.shouldMentionAll(update) }
@@ -314,7 +316,7 @@ public class SourceUpdateProcessor(
                 messageIdNonce,
                 correlationId,
                 requireActiveTarget,
-                isLinkResult,
+                deliveryMode,
             ),
             publishMessageVariant(
                 sourcePlugin,
@@ -325,7 +327,7 @@ public class SourceUpdateProcessor(
                 messageIdNonce,
                 correlationId,
                 requireActiveTarget,
-                isLinkResult,
+                deliveryMode,
             ),
         )
         val newDeliveryCount = results.sumOf { it.newDeliveries.size }
@@ -353,7 +355,7 @@ public class SourceUpdateProcessor(
         messageIdNonce: String?,
         correlationId: String?,
         requireActiveTarget: Boolean = true,
-        isLinkResult: Boolean = false,
+        deliveryMode: SourceUpdateDeliveryMode = SourceUpdateDeliveryMode.SUBSCRIPTION,
     ): OutboundMessagePublishResult? {
         if (targets.isEmpty() || batches.isEmpty()) return null
 
@@ -365,21 +367,9 @@ public class SourceUpdateProcessor(
                 targets = targets.map { it.address },
                 batches = batches,
                 renderVariant = renderVariant,
-                kind = if (isLinkResult) {
-                    OutboundMessageKind.LINK_RESULT
-                } else {
-                    OutboundMessageKind.SOURCE_UPDATE
-                },
-                importance = if (isLinkResult) {
-                    MessageImportance.LOW
-                } else {
-                    MessageImportance.NORMAL
-                },
-                recordPolicy = if (isLinkResult) {
-                    MessageRecordPolicy.Transient(retentionSeconds = LINK_RESULT_RETENTION_SECONDS)
-                } else {
-                    MessageRecordPolicy.Durable
-                },
+                kind = deliveryMode.outboundMessageKind(),
+                importance = deliveryMode.messageImportance(),
+                recordPolicy = deliveryMode.recordPolicy(),
                 correlationId = correlationId?.trim()?.takeIf { it.isNotBlank() },
                 deliveryPolicy = MessageDeliveryPolicy(requireActiveTarget = requireActiveTarget),
             ),
@@ -400,9 +390,38 @@ public class SourceUpdateProcessor(
         return result
     }
 
-    private fun SourceUpdatePublishRequest.linkParseMessageIdNonce(): String? {
-        if (deliveryTag != LINK_PARSE_EVENT_LABEL) return null
-        return "link-parse:${System.currentTimeMillis()}:${UUID.randomUUID()}"
+    private fun SourceUpdatePublishRequest.onDemandPreviewMessageIdNonce(
+        deliveryMode: SourceUpdateDeliveryMode,
+    ): String? {
+        if (!deliveryMode.isOnDemandPreview) return null
+        val tag = deliveryTag?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return "$tag:${System.currentTimeMillis()}:${UUID.randomUUID()}"
+    }
+
+    private fun SourceUpdateDeliveryMode.outboundMessageKind(): OutboundMessageKind {
+        return when (this) {
+            SourceUpdateDeliveryMode.SUBSCRIPTION -> OutboundMessageKind.SOURCE_UPDATE
+            SourceUpdateDeliveryMode.LINK_PREVIEW -> OutboundMessageKind.LINK_RESULT
+            SourceUpdateDeliveryMode.MANUAL_QUERY -> OutboundMessageKind.INTERACTION_REPLY
+        }
+    }
+
+    private fun SourceUpdateDeliveryMode.messageImportance(): MessageImportance {
+        return when (this) {
+            SourceUpdateDeliveryMode.SUBSCRIPTION,
+            SourceUpdateDeliveryMode.MANUAL_QUERY -> MessageImportance.NORMAL
+            SourceUpdateDeliveryMode.LINK_PREVIEW -> MessageImportance.LOW
+        }
+    }
+
+    private fun SourceUpdateDeliveryMode.recordPolicy(): MessageRecordPolicy {
+        return when (this) {
+            SourceUpdateDeliveryMode.SUBSCRIPTION -> MessageRecordPolicy.Durable
+            SourceUpdateDeliveryMode.LINK_PREVIEW,
+            SourceUpdateDeliveryMode.MANUAL_QUERY -> MessageRecordPolicy.Transient(
+                retentionSeconds = LINK_RESULT_RETENTION_SECONDS,
+            )
+        }
     }
 
     private fun buildMessageId(

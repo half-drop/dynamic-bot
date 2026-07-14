@@ -76,6 +76,7 @@ import top.colter.dynamic.message.RENDER_VARIANT_MANUAL_FORWARD
 import top.colter.dynamic.plugin.PluginInfo
 import top.colter.dynamic.plugin.PluginState
 import top.colter.dynamic.plugin.PluginTaskInfo
+import top.colter.dynamic.publisher.PublisherLatestUpdateService
 import top.colter.dynamic.core.task.TaskSnapshot
 import top.colter.dynamic.core.task.TaskStatus
 import top.colter.dynamic.util.formatTime
@@ -97,6 +98,7 @@ public class CommandListener(
         publisherLookupResolver(platform) as? PublisherLoginProvider
     },
     private val linkParseService: LinkParseService = LinkParseService(resolversProvider = { emptyList() }),
+    private val latestPublisherUpdateService: PublisherLatestUpdateService? = null,
     config: MainDynamicConfig? = null,
     configProvider: (() -> MainDynamicConfig)? = null,
     private val stopRequester: ((String) -> Unit)? = null,
@@ -309,6 +311,12 @@ public class CommandListener(
             ),
             MAIN_OWNER,
         )
+        latestPublisherUpdateService?.let { service ->
+            commandRegistry.register(
+                PublisherLatestUpdateCommandHandler(service, commandPrefixProvider),
+                MAIN_OWNER,
+            )
+        }
         LinkParseConfigCommandHandler.handlers({ runtimeConfig }, commandPrefixProvider)
             .forEach { handler -> commandRegistry.register(handler, MAIN_OWNER) }
         commandRegistry.register(
