@@ -98,6 +98,26 @@ public class LinkParseService(
         inReplyTo: String? = null,
         correlationId: String? = null,
         onForwardingStarted: suspend (ParsedLink) -> Unit = {},
+    ): LinkParseBatchResult = parseAndDispatch(
+        urls = LinkUrlExtractor.extract(text),
+        context = context,
+        maxLinks = maxLinks,
+        dedupe = dedupe,
+        dedupeTtlMs = dedupeTtlMs,
+        inReplyTo = inReplyTo,
+        correlationId = correlationId,
+        onForwardingStarted = onForwardingStarted,
+    )
+
+    internal suspend fun parseAndDispatch(
+        urls: List<String>,
+        context: CommandContext,
+        maxLinks: Int = 1,
+        dedupe: LinkParseDedupe? = null,
+        dedupeTtlMs: Long = 0,
+        inReplyTo: String? = null,
+        correlationId: String? = null,
+        onForwardingStarted: suspend (ParsedLink) -> Unit = {},
     ): LinkParseBatchResult {
         val startedNanos = System.nanoTime()
         if (maxLinks <= 0) return recordLinkProcessing(
@@ -106,8 +126,12 @@ public class LinkParseService(
             startedNanos = startedNanos,
         )
 
-        val urls = LinkUrlExtractor.extract(text)
-        if (urls.isEmpty()) return recordLinkProcessing(
+        val normalizedUrls = urls.asSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+            .toList()
+        if (normalizedUrls.isEmpty()) return recordLinkProcessing(
             correlationId = correlationId,
             result = LinkParseBatchResult.noSupportedLink(),
             startedNanos = startedNanos,
@@ -126,7 +150,7 @@ public class LinkParseService(
         var supportedLinks = 0
         var started = false
 
-        for (url in urls) {
+        for (url in normalizedUrls) {
             if (supportedLinks >= maxLinks) break
             val candidate = parseUrl(url, resolvers) ?: continue
             supportedLinks += 1
@@ -195,13 +219,17 @@ public class LinkParseService(
         return result
     }
 
-    internal fun hasSupportedLinkCandidate(text: String, maxLinks: Int = 1): Boolean {
+    internal fun hasSupportedLinkCandidate(text: String, maxLinks: Int = 1): Boolean =
+        hasSupportedLinkCandidate(LinkUrlExtractor.extract(text), maxLinks)
+
+    internal fun hasSupportedLinkCandidate(urls: List<String>, maxLinks: Int = 1): Boolean {
         if (maxLinks <= 0) return false
-        val urls = LinkUrlExtractor.extract(text)
-        if (urls.isEmpty()) return false
         val resolvers = resolversProvider()
         if (resolvers.isEmpty()) return false
-        return urls.any { url -> resolvers.any { resolver -> resolver.safeMatchesLink(url) } }
+        return urls.asSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .any { url -> resolvers.any { resolver -> resolver.safeMatchesLink(url) } }
     }
 
     private suspend fun parseUrl(url: String, resolvers: List<LinkResolver>): ParsedLinkCandidate? {

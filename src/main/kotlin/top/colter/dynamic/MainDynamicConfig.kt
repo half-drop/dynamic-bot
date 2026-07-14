@@ -93,6 +93,7 @@ public data class LinkParsingConfig(
     val progressReply: LinkParseProgressReplyConfig = LinkParseProgressReplyConfig(),
     val templates: LinkParseTemplates = LinkParseTemplates(),
     val videoDownload: LinkVideoDownloadConfig = LinkVideoDownloadConfig(),
+    val platformCardLinksEnabled: Boolean = false,
 )
 
 public enum class LinkParseTriggerMode {

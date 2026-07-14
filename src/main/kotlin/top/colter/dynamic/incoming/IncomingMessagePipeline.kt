@@ -18,6 +18,7 @@ import top.colter.dynamic.event.EventBus
 import top.colter.dynamic.event.IncomingMessageEvent
 import top.colter.dynamic.event.IncomingTextMessageEvent
 import top.colter.dynamic.link.LinkParseService
+import top.colter.dynamic.link.LinkUrlExtractor
 import top.colter.dynamic.repository.IncomingAuditWriteRequest
 import top.colter.dynamic.repository.IncomingMessageAuditRepository
 import top.colter.dynamic.repository.SubscriberStateCache
@@ -48,16 +49,22 @@ internal class IncomingMessagePipeline(
             ?.takeIf { it.isNotBlank() }
             ?: message.messageId.trim().takeIf { it.isNotBlank() }
             ?: ""
+        val config = configProvider()
         val rawText = message.commandText().trim()
         val commandContext = message.toCommandContext()
-        val commandPrefix = configProvider().command.prefix
+        val commandPrefix = config.command.prefix
         val isCommand = rawText.isNotBlank() && CommandParser.parse(rawText, commandPrefix) != null
-        val hasSupportedLinks = if (rawText.isBlank() || isCommand) {
+        val linkUrls = if (isCommand) {
+            emptyList()
+        } else {
+            message.linkUrls(config.linkParsing.platformCardLinksEnabled)
+        }
+        val hasSupportedLinks = if (linkUrls.isEmpty() || isCommand) {
             false
         } else {
             linkParseService.hasSupportedLinkCandidate(
-                text = rawText,
-                maxLinks = configProvider().linkParsing.maxLinksPerMessage,
+                urls = linkUrls,
+                maxLinks = config.linkParsing.maxLinksPerMessage,
             )
         }
         val intent = when {
@@ -113,13 +120,14 @@ internal class IncomingMessagePipeline(
                     ),
                 )
             }
-        } else if (rawText.isNotBlank()) {
+        } else if (rawText.isNotBlank() || hasSupportedLinks) {
             eventBus.broadcast(
                 IncomingTextMessageEvent(
                     sourcePlugin = sourcePlugin,
                     message = message,
                     context = commandContext,
                     rawText = rawText,
+                    linkUrls = linkUrls,
                     traceId = traceId,
                     replyToMessageId = replyToMessageId,
                     hasSupportedLinks = hasSupportedLinks,
@@ -221,6 +229,19 @@ internal class IncomingMessagePipeline(
             }
         }
         return if (seenBotMention) builder.toString().trimStart() else normalizedText
+    }
+
+    private fun IncomingMessage.linkUrls(includePlatformCardLinks: Boolean): List<String> {
+        val urls = linkedSetOf<String>()
+        segments.forEach { segment ->
+            when (segment) {
+                is IncomingMessageSegment.Text -> LinkUrlExtractor.extract(segment.text).forEach(urls::add)
+                is IncomingMessageSegment.Link -> if (includePlatformCardLinks) urls += segment.url.trim()
+                else -> Unit
+            }
+        }
+        LinkUrlExtractor.extract(text).forEach(urls::add)
+        return urls.filter(String::isNotBlank)
     }
 
     private fun stripLeadingMentionSyntax(text: String): String {

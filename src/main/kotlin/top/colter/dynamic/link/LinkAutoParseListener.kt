@@ -58,10 +58,11 @@ internal class LinkAutoParseListener(
             }
         }
         val autoDedupe = dedupe.takeIf { triggerMode == LinkParseTriggerMode.ALWAYS }
+        val linkUrls = event.linkUrls.ifEmpty { LinkUrlExtractor.extract(event.rawText) }
         val finalResult = try {
             sendProgressOnce()
             linkParseService.parseAndDispatch(
-                text = event.rawText,
+                urls = linkUrls,
                 context = event.context,
                 maxLinks = linkParsing.maxLinksPerMessage,
                 dedupe = autoDedupe,
@@ -142,7 +143,6 @@ internal class LinkAutoParseListener(
     }
 
     private fun logKnownBotSenderBlocked(event: IncomingTextMessageEvent) {
-        if (!event.rawText.contains("http://") && !event.rawText.contains("https://")) return
         val context = event.context
         autoParseLogger.debug {
             "链接自动解析未触发：消息发送者是已知 Bot target=${context.target.stableValue()} senderId=${context.senderId} botAccountId=${context.botAccountId ?: "未知"}"
@@ -150,7 +150,6 @@ internal class LinkAutoParseListener(
     }
 
     private fun logBotBlocked(event: IncomingTextMessageEvent) {
-        if (!event.rawText.contains("http://") && !event.rawText.contains("https://")) return
         val context = event.context
         autoParseLogger.debug {
             "链接自动解析未触发：当前 Bot 不是主 Bot 且未被 @ target=${context.target.stableValue()} botAccountId=${context.botAccountId ?: "未知"} mentionedAccountIds=${context.mentionedAccountIds.joinToString(",").ifBlank { "无" }}"
@@ -158,7 +157,6 @@ internal class LinkAutoParseListener(
     }
 
     private fun logTriggerBlocked(event: IncomingTextMessageEvent, triggerMode: LinkParseTriggerMode) {
-        if (!event.rawText.contains("http://") && !event.rawText.contains("https://")) return
         val context = event.context
         when (triggerMode) {
             LinkParseTriggerMode.DISABLED -> autoParseLogger.debug {

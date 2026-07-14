@@ -422,6 +422,7 @@ private fun IncomingMessage.previewText(): String {
 private fun IncomingMessageSegment.previewText(): String? {
     return when (this) {
         is IncomingMessageSegment.Text -> text
+        is IncomingMessageSegment.Link -> listOfNotNull(title, url).joinToString(" ")
         is IncomingMessageSegment.Image -> url ?: file.takeIf { it.isNotBlank() }?.let { "图片 $it" }
         is IncomingMessageSegment.Video -> url ?: file.takeIf { it.isNotBlank() }?.let { "视频 $it" }
         is IncomingMessageSegment.Audio -> url ?: file.takeIf { it.isNotBlank() }?.let { "音频 $it" }
@@ -435,6 +436,7 @@ private fun IncomingMessage.segmentSummary(): String {
     val counts = segments.groupingBy { segment ->
         when (segment) {
             is IncomingMessageSegment.Text -> "文本"
+            is IncomingMessageSegment.Link -> "链接"
             is IncomingMessageSegment.Mention -> "提及"
             is IncomingMessageSegment.Image -> "图片"
             is IncomingMessageSegment.Video -> "视频"

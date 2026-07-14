@@ -390,6 +390,37 @@ class LinkParseServiceTest {
     }
 
     @Test
+    fun `auto parser should process structured link urls without plain text`() = runBlocking {
+        initDb("auto-structured-link")
+        val resolver = FakeLinkResolver()
+        val sourceUpdates = RecordingSourceUpdatePublisher()
+        val listener = LinkAutoParseListener(
+            configProvider = {
+                MainDynamicConfig(
+                    linkParsing = LinkParsingConfig(
+                        fallbackTriggerMode = LinkParseTriggerMode.ALWAYS,
+                        progressReply = LinkParseProgressReplyConfig(text = ""),
+                    ),
+                )
+            },
+            linkParseService = LinkParseService(
+                resolversProvider = { listOf(resolver) },
+                sourceUpdatePublisher = sourceUpdates,
+            ),
+        )
+
+        listener.onMessage(
+            incomingTextEvent(
+                rawText = "",
+                linkUrls = listOf("https://t.bilibili.com/1"),
+            ),
+        )
+
+        assertEquals("1", withTimeout(3_000) { sourceUpdates.receive() }.update.key.externalId)
+        assertEquals(1, resolver.resolveCalls)
+    }
+
+    @Test
     fun `auto parser should send progress before slow link detection completes`() = runBlocking {
         initDb("auto-progress-before-parse")
         val resolver = BlockingLinkResolver()
@@ -1465,6 +1496,7 @@ class LinkParseServiceTest {
 
     private fun incomingTextEvent(
         rawText: String,
+        linkUrls: List<String> = emptyList(),
         targetExternalId: String = "100",
         senderId: String = "sender",
         botAccountId: String? = null,
@@ -1491,6 +1523,7 @@ class LinkParseServiceTest {
             ),
             context = context,
             rawText = rawText,
+            linkUrls = linkUrls,
             traceId = "trace",
             hasSupportedLinks = hasSupportedLinks,
         )

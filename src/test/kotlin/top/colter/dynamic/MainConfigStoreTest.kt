@@ -60,6 +60,7 @@ class MainConfigStoreTest {
         assertEquals(1.0, config.draw.scale)
         assertEquals("{draw}", config.linkParsing.templates.message)
         assertEquals(0.0, config.linkParsing.videoDownload.maxFileMegabytes)
+        assertFalse(config.linkParsing.platformCardLinksEnabled)
 
         assertContainsAll(
             paths,
@@ -71,6 +72,7 @@ class MainConfigStoreTest {
                 "draw.font.typography.autoNormalize",
                 "draw.font.typography.lineHeightScale",
                 "draw.font.typography.letterSpacingEm",
+                "linkParsing.platformCardLinksEnabled",
                 "linkParsing.templates.message",
                 "linkParsing.videoDownload.prompts.downloading",
                 "linkParsing.videoDownload.prompts.failed",
@@ -316,6 +318,8 @@ class MainConfigStoreTest {
         assertTrue(byPath.getValue("draw.font.typography.autoNormalize").advanced)
         assertEquals("链接解析", byPath.getValue("linkParsing.templates.message").section)
         assertEquals("MESSAGE_TEMPLATE_EDITOR", byPath.getValue("linkParsing.templates.message").component)
+        assertEquals("链接解析", byPath.getValue("linkParsing.platformCardLinksEnabled").section)
+        assertFalse(byPath.getValue("linkParsing.platformCardLinksEnabled").advanced)
         assertEquals("发送与媒体", byPath.getValue("mediaDelivery.profiles").section)
         assertFalse(byPath.getValue("mediaDelivery.profiles").advanced)
         assertEquals("MEDIA_DELIVERY_PROFILES", byPath.getValue("mediaDelivery.profiles").component)

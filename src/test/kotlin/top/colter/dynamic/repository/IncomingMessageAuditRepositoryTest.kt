@@ -2,6 +2,7 @@ package top.colter.dynamic.repository
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -53,6 +54,33 @@ class IncomingMessageAuditRepositoryTest {
         assertEquals("json", record.rawFormat)
         assertEquals(rawPayload().toByteArray(Charsets.UTF_8).size, record.rawPayloadSize)
         assertNotNull(record.rawPayloadSha256)
+    }
+
+    @Test
+    fun tracePolicyShouldPreviewStructuredLinkWithoutPersistingRawCardPayload() {
+        initTestDatabase("incoming-audit-link-card")
+        val rawCard = """{"type":"json","data":{"data":"card payload"}}"""
+        val message = incomingMessage().copy(
+            text = "",
+            segments = listOf(
+                IncomingMessageSegment.Link(
+                    url = "https://b23.tv/demo",
+                    title = "测试视频",
+                    rawPayload = rawCard,
+                ),
+            ),
+        )
+
+        IncomingMessageAuditRepository.recordMessage(
+            auditRequest(traceId = "trace-card", recordPolicy = IncomingMessageRecordPolicy.Trace())
+                .copy(message = message),
+        )
+
+        val record = requireNotNull(IncomingMessageAuditRepository.findByTraceId("trace-card")).message
+        assertEquals("测试视频 https://b23.tv/demo", record.textPreview)
+        assertEquals("链接 1", record.segmentSummary)
+        assertFalse(record.textPreview.contains("card payload"))
+        assertEquals(rawPayload().toByteArray(Charsets.UTF_8).size, record.rawPayloadSize)
     }
 
     @Test

@@ -389,6 +389,84 @@ class IncomingMessagePipelineTest {
     }
 
     @Test
+    fun `platform card link should remain non text while disabled`() = runBlocking {
+        val eventBus = EventBus()
+        val textEvent = CompletableDeferred<IncomingTextMessageEvent>()
+        eventBus.subscribe(
+            object : Listener<IncomingTextMessageEvent> {
+                override suspend fun onMessage(event: IncomingTextMessageEvent) {
+                    textEvent.complete(event)
+                }
+            },
+        )
+        val dispatch = CompletableDeferred<IncomingMessageDispatchContext>()
+        val recorder = RecordingAuditRecorder()
+        val resolver = MatchingLinkResolver(prefix = "https://b23.tv/")
+        val pipeline = pipeline(
+            eventBus = eventBus,
+            linkParseService = LinkParseService(resolversProvider = { listOf(resolver) }),
+            incomingConsumerDispatcher = { dispatch.complete(it) },
+            auditRecorder = recorder,
+        )
+        val message = testMessage(
+            text = "",
+            segments = listOf(IncomingMessageSegment.Link("https://b23.tv/demo", title = "测试视频")),
+        )
+
+        pipeline.handle("onebot", IncomingMessagePublishRequest(message = message, traceId = "trace-card-off"))
+
+        assertEquals(IncomingMessageIntent.NonText, withTimeout(1_000) { dispatch.await() }.intent)
+        assertEquals(0, recorder.records.size)
+        assertNull(withTimeoutOrNull(200) { textEvent.await() })
+        eventBus.shutdown()
+    }
+
+    @Test
+    fun `enabled platform card link should become a supported link candidate`() = runBlocking {
+        val eventBus = EventBus()
+        val textEvent = CompletableDeferred<IncomingTextMessageEvent>()
+        eventBus.subscribe(
+            object : Listener<IncomingTextMessageEvent> {
+                override suspend fun onMessage(event: IncomingTextMessageEvent) {
+                    textEvent.complete(event)
+                }
+            },
+        )
+        val dispatch = CompletableDeferred<IncomingMessageDispatchContext>()
+        val recorder = RecordingAuditRecorder()
+        val resolver = MatchingLinkResolver(prefix = "https://b23.tv/")
+        val pipeline = pipeline(
+            eventBus = eventBus,
+            configProvider = {
+                MainDynamicConfig(
+                    command = CommandConfig(prefix = "/db", requirePermissionRule = false),
+                    linkParsing = LinkParsingConfig(
+                        platformCardLinksEnabled = true,
+                        maxLinksPerMessage = 3,
+                    ),
+                )
+            },
+            linkParseService = LinkParseService(resolversProvider = { listOf(resolver) }),
+            incomingConsumerDispatcher = { dispatch.complete(it) },
+            auditRecorder = recorder,
+        )
+        val message = testMessage(
+            text = "",
+            segments = listOf(IncomingMessageSegment.Link("https://b23.tv/demo", title = "测试视频")),
+        )
+
+        pipeline.handle("onebot", IncomingMessagePublishRequest(message = message, traceId = "trace-card-on"))
+
+        val text = withTimeout(1_000) { textEvent.await() }
+        assertEquals("", text.rawText)
+        assertEquals(listOf("https://b23.tv/demo"), text.linkUrls)
+        assertTrue(text.hasSupportedLinks)
+        assertEquals(IncomingMessageIntent.LinkText, withTimeout(1_000) { dispatch.await() }.intent)
+        assertEquals(IncomingMessageIntent.LinkText, recorder.records.single().intent)
+        eventBus.shutdown()
+    }
+
+    @Test
     fun `handle should route ordinary text without command or link intent`() = runBlocking {
         val eventBus = EventBus()
         val textEvent = CompletableDeferred<IncomingTextMessageEvent>()

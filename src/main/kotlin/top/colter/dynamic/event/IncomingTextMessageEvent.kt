@@ -11,4 +11,5 @@ public data class IncomingTextMessageEvent(
     val traceId: String,
     val hasSupportedLinks: Boolean,
     val replyToMessageId: String = "",
+    val linkUrls: List<String> = emptyList(),
 ) : Event

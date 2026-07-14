@@ -286,6 +286,13 @@ public object MainConfigForms {
                     description = "自动处理聊天中的支持链接。\n开启后，群聊或私聊里出现支持的链接时，会按当前目标发送解析结果。",
                 ),
                 ConfigFieldSpec(
+                    path = "linkParsing.platformCardLinksEnabled",
+                    label = "解析平台卡片链接",
+                    type = ConfigFieldType.BOOLEAN,
+                    section = "链接解析",
+                    description = "允许 QQ 小程序等平台卡片中的跳转链接参与解析。\n仍受解析总开关、目标触发方式和多 Bot 路由规则限制。",
+                ),
+                ConfigFieldSpec(
                     path = "linkParsing.fallbackTriggerMode",
                     label = "默认链接解析方式",
                     type = ConfigFieldType.SELECT,
