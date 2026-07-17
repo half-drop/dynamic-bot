@@ -39,6 +39,7 @@
         "PUBLISHER_FOLLOW",
         "PUBLISHER_LOGIN",
         "LINK_RESOLVER",
+        "LINK_VIDEO_DOWNLOADER",
         "CONFIGURABLE"
       ]
     },
