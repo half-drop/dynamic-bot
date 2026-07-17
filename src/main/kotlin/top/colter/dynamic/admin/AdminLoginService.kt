@@ -104,7 +104,8 @@ public class AdminLoginService(
             val result = runCatching {
                 plugin.loginByQrCode(
                     onQrCode = { qrChallenge ->
-                        val imageBytes = qrCodeRenderer.renderPng(qrChallenge.qrContent)
+                        val imageBytes = qrChallenge.qrImageBytes
+                            ?: qrCodeRenderer.renderPng(requireNotNull(qrChallenge.qrContent))
                         sessions[loginId] = sessions[loginId]
                             ?.copy(
                                 status = PublisherLoginStatus.PENDING.name,

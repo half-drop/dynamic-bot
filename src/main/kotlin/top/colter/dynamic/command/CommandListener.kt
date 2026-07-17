@@ -618,7 +618,8 @@ private class LoginCommandHandler(
         }
 
         val imagePath = runCatching {
-            qrCodeRenderer.render(challenge.qrContent)
+            challenge.qrImageBytes?.let(qrCodeRenderer::writePng)
+                ?: challenge.qrContent?.let(qrCodeRenderer::render)
         }.getOrNull()
 
         val contents = buildList {
@@ -696,6 +697,15 @@ private class LoginQrCodeRenderer(
             }
         }
         ImageIO.write(image, "png", outputPath.toFile())
+        return outputPath.toString()
+    }
+
+    fun writePng(bytes: ByteArray): String {
+        Files.createDirectories(outputDir)
+        val outputPath = outputDir
+            .resolve("qr-${System.currentTimeMillis()}-${bytes.contentHashCode().toUInt().toString(16)}.png")
+            .toAbsolutePath()
+        Files.write(outputPath, bytes)
         return outputPath.toString()
     }
 }
