@@ -830,6 +830,47 @@ class LinkParseServiceTest {
     }
 
     @Test
+    fun `video preview resolved from dynamic link should download video`() = runBlocking {
+        initDb("video-download-from-dynamic")
+        val cacheRoot = createTempDirectory("dynamic-bot-link-video-cache")
+        val videoFile = cacheRoot.resolve("video.mp4")
+        videoFile.writeBytes(byteArrayOf(0, 0, 0, 1))
+        val downloader = FakeVideoDownloader(
+            result = LinkVideoDownloadResult(
+                video = MediaRef(videoFile.toString(), MediaKind.VIDEO, mimeType = "video/mp4"),
+                fileSizeBytes = 4,
+                durationSeconds = 120,
+            ),
+        )
+        val service = LinkParseService(
+            resolversProvider = { listOf(FakeVideoLinkResolver(linkKind = LinkKinds.DYNAMIC)) },
+            configProvider = {
+                MainDynamicConfig(
+                    linkParsing = LinkParsingConfig(
+                        templates = LinkParseTemplates(message = "{video}"),
+                        videoDownload = LinkVideoDownloadConfig(cacheRoot = cacheRoot.toString()),
+                    ),
+                )
+            },
+            videoDownloadersProvider = { listOf(downloader) },
+        )
+
+        val result = service.parseAndDispatch(
+            text = "https://www.bilibili.com/video/BV1xx411c7mD",
+            context = commandEvent("").context,
+            maxLinks = 1,
+        )
+
+        assertEquals(1, result.forwarded.size)
+        assertEquals(LinkKinds.DYNAMIC, downloader.requests.single().parsedLink.kind)
+        assertTrue(
+            MessageDeliveryRepository.findRecent(limit = 5)
+                .mapNotNull { MessageDeliveryRepository.findMessage(it.messageId) }
+                .any { message -> message.batches.single().content.any { it is MessageContent.Video } },
+        )
+    }
+
+    @Test
     fun `video preview stats placeholder should render metrics`() = runBlocking {
         initDb("video-preview-stats")
         val service = LinkParseService(
@@ -1686,6 +1727,7 @@ class LinkParseServiceTest {
 
     private class FakeVideoLinkResolver(
         private val publisher: PublisherInfo? = null,
+        private val linkKind: String = LinkKinds.VIDEO,
     ) : LinkResolver {
         override val platformId: PlatformId = PlatformId.of("bilibili")
 
@@ -1697,7 +1739,7 @@ class LinkParseServiceTest {
             val id = inputUrl.substringAfterLast("/").substringBefore("?").takeIf { it.isNotBlank() } ?: return null
             return ParsedLink(
                 platformId = platformId,
-                kind = LinkKinds.VIDEO,
+                kind = linkKind,
                 targetId = id,
                 normalizedUrl = "https://www.bilibili.com/video/$id",
                 sourceUrl = inputUrl,
