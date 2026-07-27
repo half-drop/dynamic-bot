@@ -2036,6 +2036,19 @@
     .config-field-control textarea {
       min-height: 120px;
     }
+    @container (max-width: 620px) {
+      .config-field-main,
+      .config-toggle-field .config-field-main {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+      }
+      .config-field-control {
+        width: 100%;
+      }
+      .config-switch-control {
+        justify-content: flex-start;
+      }
+    }
     .config-toggle-field .config-field-main {
       grid-template-columns: minmax(220px, 1fr) auto;
     }
@@ -5426,6 +5439,7 @@
     }
     .config-tab-stage {
       min-width: 0;
+      container-type: inline-size;
       display: grid;
       gap: 14px;
     }

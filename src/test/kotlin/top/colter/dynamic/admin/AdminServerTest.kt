@@ -1907,11 +1907,16 @@ class AdminServerTest {
         )
         val listed = service.publishers().single()
 
-        assertNotNull(themed.drawTheme)
+        val storedTheme = assertNotNull(PublisherDrawThemeRepository.findByPublisherId(publisher.id))
+        val themedTheme = assertNotNull(themed.drawTheme)
         val listedTheme = assertNotNull(listed.drawTheme)
         assertEquals(
+            storedTheme.palette.backgroundColors,
+            themedTheme.backgroundColors,
+        )
+        assertEquals(
+            storedTheme.palette.backgroundColors,
             listedTheme.backgroundColors,
-            PublisherDrawThemeRepository.findByPublisherId(publisher.id)!!.palette.backgroundColors,
         )
 
         val cleared = service.updatePublisher(
