@@ -1088,16 +1088,19 @@ function collectCreateSubscriberTargets(targetController) {
 async function openEditPublisher(id) {
   if (!state.cache.publishers) state.cache.publishers = await api("/publishers");
   const item = state.cache.publishers.find(row => Number(row.id) === Number(id));
+  const initialThemeColors = Array.isArray(item.drawTheme?.backgroundColors)
+    ? item.drawTheme.backgroundColors.filter(Boolean).join(";")
+    : "";
   openModal("编辑发布者", `
     <div class="form-grid">
       <div class="field"><label>状态</label><select id="entityState">${entityStateOptions(item.state)}</select></div>
       <div class="field full"><label>头图</label><input id="entityHeader" value="${attr(item.bannerUri || "")}"></div>
-      <div class="field full"><label>主题色</label><div class="command-permission-toolbar"><input id="entityThemeColors" placeholder="#FE65A6;#BFFAFF"><button type="button" class="secondary" id="entityClearThemeButton"${item.drawTheme ? "" : " disabled"}>清除主题色</button></div><span class="inline-note">多个颜色用英文分号分隔；留空表示不修改。</span></div>
+      <div class="field full"><label>主题色</label><div class="command-permission-toolbar"><input id="entityThemeColors" value="${attr(initialThemeColors)}" placeholder="#FE65A6;#BFFAFF"><button type="button" class="secondary" id="entityClearThemeButton"${item.drawTheme ? "" : " disabled"}>清除主题色</button></div><span class="inline-note">多个颜色用英文分号分隔；留空表示不修改。</span></div>
     </div>
   `, async () => {
     const body = { headerUri: $("entityHeader").value, state: $("entityState").value };
     const themeColors = $("entityThemeColors").value.trim();
-    if (themeColors) body.themeColors = themeColors;
+    if (themeColors && themeColors !== initialThemeColors) body.themeColors = themeColors;
     await api(`/publishers/${id}`, { method: "PATCH", body: JSON.stringify(body) });
     closeModal();
     invalidate("publishers", "subscriptions", "dashboard");
