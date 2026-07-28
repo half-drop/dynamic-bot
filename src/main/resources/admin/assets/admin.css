@@ -2036,6 +2036,9 @@
     .config-field-control textarea {
       min-height: 120px;
     }
+    .config-toggle-field .config-field-main {
+      grid-template-columns: minmax(220px, 1fr) auto;
+    }
     @container (max-width: 620px) {
       .config-field-main,
       .config-toggle-field .config-field-main {
@@ -2048,9 +2051,6 @@
       .config-switch-control {
         justify-content: flex-start;
       }
-    }
-    .config-toggle-field .config-field-main {
-      grid-template-columns: minmax(220px, 1fr) auto;
     }
     .config-switch-control {
       position: relative;
