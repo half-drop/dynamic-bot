@@ -1,14 +1,17 @@
 ﻿package top.colter.dynamic.listener
 
+import com.sun.net.httpserver.HttpServer
 import java.awt.Color
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
+import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.exists
 import kotlin.io.path.writeBytes
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -114,6 +117,74 @@ class CachedDynamicImageLoaderTest {
         assertEquals(bytes.size, loaded.size)
     }
 
+    @Test
+    fun httpDownloaderShouldRetryWhenResponseBodyIsTruncated(): Unit = runBlocking {
+        val attempts = AtomicInteger()
+        val expected = pngBytes(Color.ORANGE)
+        val server = truncatedResponseServer(expected, attempts, failuresBeforeSuccess = 1)
+
+        try {
+            val loaded = HttpImageDownloader(
+                maxHttpAttempts = 3,
+                retryBaseDelayMillis = 1,
+            ).download(server.url(), timeoutMs = 1_000, maxBytes = 1024)
+
+            assertContentEquals(expected, loaded)
+            assertEquals(2, attempts.get())
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun httpDownloaderShouldStopAfterConfiguredAttemptsForTruncatedResponses(): Unit = runBlocking {
+        val attempts = AtomicInteger()
+        val expected = pngBytes(Color.PINK)
+        val server = truncatedResponseServer(expected, attempts, failuresBeforeSuccess = Int.MAX_VALUE)
+
+        try {
+            try {
+                HttpImageDownloader(
+                    maxHttpAttempts = 3,
+                    retryBaseDelayMillis = 1,
+                ).download(server.url(), timeoutMs = 1_000, maxBytes = 1024)
+                fail("truncated responses should fail after the configured attempts")
+            } catch (_: ImageDownloadException) {
+            }
+            assertEquals(3, attempts.get())
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun httpDownloaderShouldNotRetryPermanentHttpErrors(): Unit = runBlocking {
+        val attempts = AtomicInteger()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/missing.png") { exchange ->
+                exchange.use {
+                    attempts.incrementAndGet()
+                    exchange.sendResponseHeaders(404, -1)
+                }
+            }
+            start()
+        }
+
+        try {
+            try {
+                HttpImageDownloader(
+                    maxHttpAttempts = 3,
+                    retryBaseDelayMillis = 1,
+                ).download("http://127.0.0.1:${server.address.port}/missing.png", timeoutMs = 1_000, maxBytes = 1024)
+                fail("permanent HTTP errors should fail immediately")
+            } catch (_: ImageDownloadException) {
+            }
+            assertEquals(1, attempts.get())
+        } finally {
+            server.stop(0)
+        }
+    }
+
     private fun loader(
         sourceRoot: String,
         maxConcurrentDownloads: Int = 8,
@@ -157,4 +228,24 @@ class CachedDynamicImageLoaderTest {
             output.toByteArray()
         }
     }
+
+    private fun truncatedResponseServer(
+        bytes: ByteArray,
+        attempts: AtomicInteger,
+        failuresBeforeSuccess: Int,
+    ): HttpServer {
+        return HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/image.png") { exchange ->
+                exchange.use {
+                    val attempt = attempts.incrementAndGet()
+                    val truncated = attempt <= failuresBeforeSuccess
+                    exchange.sendResponseHeaders(200, bytes.size.toLong() + if (truncated) 10 else 0)
+                    exchange.responseBody.write(bytes)
+                }
+            }
+            start()
+        }
+    }
+
+    private fun HttpServer.url(): String = "http://127.0.0.1:${address.port}/image.png"
 }

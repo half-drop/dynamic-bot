@@ -26,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -131,7 +132,14 @@ public class HttpImageDownloader(
     private val client: HttpClient = HttpClient.newBuilder()
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build(),
+    private val maxHttpAttempts: Int = DEFAULT_HTTP_ATTEMPTS,
+    private val retryBaseDelayMillis: Long = DEFAULT_HTTP_RETRY_BASE_DELAY_MILLIS,
 ) : ImageDownloader {
+    init {
+        require(maxHttpAttempts >= 1) { "HTTP 下载尝试次数至少为 1" }
+        require(retryBaseDelayMillis >= 0) { "HTTP 下载重试间隔不能为负数" }
+    }
+
     override suspend fun download(uri: String, timeoutMs: Long, maxBytes: Long): ByteArray {
         val parsed = runCatching { URI(uri) }.getOrNull()
         return try {
@@ -155,21 +163,44 @@ public class HttpImageDownloader(
     }
 
     private suspend fun downloadHttp(uri: String, timeoutMs: Long, maxBytes: Long): ByteArray {
+        var lastFailure: ImageDownloadException? = null
+        repeat(maxHttpAttempts) { attempt ->
+            try {
+                return downloadHttpOnce(uri, timeoutMs, maxBytes)
+            } catch (e: ImageDownloadException) {
+                if (!e.isTransientHttpFailure() || attempt == maxHttpAttempts - 1) throw e
+                lastFailure = e
+                delay(retryBaseDelayMillis * (attempt + 1L))
+            }
+        }
+        throw checkNotNull(lastFailure)
+    }
+
+    private suspend fun downloadHttpOnce(uri: String, timeoutMs: Long, maxBytes: Long): ByteArray {
         val request = HttpRequest.newBuilder(URI(uri))
             .timeout(Duration.ofMillis(timeoutMs))
             .GET()
             .build()
-        val response = client
-            .sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
-            .awaitHttp(uri)
-        if (response.statusCode() !in 200..299) {
-            response.body().close()
-            throw ImageDownloadException("HTTP ${response.statusCode()}")
+        try {
+            val response = client
+                .sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
+                .awaitHttp(uri)
+            if (response.statusCode() !in 200..299) {
+                response.body().close()
+                throw ImageDownloadException("HTTP ${response.statusCode()}")
+            }
+            response.headers().firstValueAsLong("Content-Length")
+                .takeIf { it.isPresent && it.asLong > maxBytes }
+                ?.let {
+                    response.body().close()
+                    throw ImageDownloadException("图片超过大小限制：size=${it.asLong}，maxBytes=$maxBytes")
+                }
+            return response.body().use { input -> readBytesLimited(input, maxBytes) }
+        } catch (e: ImageDownloadException) {
+            throw e
+        } catch (e: IOException) {
+            throw ImageDownloadException(e.message ?: "请求失败：$uri", e)
         }
-        response.headers().firstValueAsLong("Content-Length")
-            .takeIf { it.isPresent && it.asLong > maxBytes }
-            ?.let { throw ImageDownloadException("图片超过大小限制：size=${it.asLong}，maxBytes=$maxBytes") }
-        return response.body().use { input -> readBytesLimited(input, maxBytes) }
     }
 
     private fun readFileLimited(path: Path, maxBytes: Long): ByteArray {
@@ -205,6 +236,10 @@ public class HttpImageDownloader(
     }
 }
 
+private fun ImageDownloadException.isTransientHttpFailure(): Boolean {
+    return generateSequence(cause) { it.cause }.any { it is IOException }
+}
+
 private suspend fun <T> CompletableFuture<T>.awaitHttp(uri: String): T {
     return try {
         await()
@@ -233,3 +268,6 @@ private fun secondsToMillis(seconds: Double, minimumMillis: Long): Long {
     if (seconds <= 0.0 && minimumMillis <= 0) return 0
     return (seconds * 1_000.0).roundToLong().coerceAtLeast(minimumMillis)
 }
+
+private const val DEFAULT_HTTP_ATTEMPTS: Int = 3
+private const val DEFAULT_HTTP_RETRY_BASE_DELAY_MILLIS: Long = 200
