@@ -136,7 +136,7 @@ public class HttpImageDownloader(
         val parsed = runCatching { URI(uri) }.getOrNull()
         return try {
             when (parsed?.scheme?.lowercase()) {
-                "http", "https" -> downloadHttp(uri, timeoutMs, maxBytes)
+                "http", "https" -> downloadHttp(normalizeRemoteImageUri(parsed), timeoutMs, maxBytes)
                 "file" -> readFileLimited(Paths.get(parsed), maxBytes)
                 null -> readFileLimited(Paths.get(uri), maxBytes)
                 else -> readLocalPathOrThrow(uri, parsed.scheme, maxBytes)
@@ -154,14 +154,14 @@ public class HttpImageDownloader(
         }
     }
 
-    private suspend fun downloadHttp(uri: String, timeoutMs: Long, maxBytes: Long): ByteArray {
-        val request = HttpRequest.newBuilder(URI(uri))
+    private suspend fun downloadHttp(uri: URI, timeoutMs: Long, maxBytes: Long): ByteArray {
+        val request = HttpRequest.newBuilder(uri)
             .timeout(Duration.ofMillis(timeoutMs))
             .GET()
             .build()
         val response = client
             .sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
-            .awaitHttp(uri)
+            .awaitHttp(uri.toString())
         if (response.statusCode() !in 200..299) {
             response.body().close()
             throw ImageDownloadException("HTTP ${response.statusCode()}")
@@ -203,6 +203,17 @@ public class HttpImageDownloader(
         }
         return output.toByteArray()
     }
+}
+
+internal fun normalizeRemoteImageUri(uri: URI): URI {
+    val scheme = uri.scheme ?: return uri
+    if (!scheme.equals("http", ignoreCase = true)) return uri
+    val host = uri.host ?: return uri
+    if (!host.equals("hdslb.com", ignoreCase = true) && !host.endsWith(".hdslb.com", ignoreCase = true)) {
+        return uri
+    }
+    val original = uri.toString()
+    return URI("https" + original.substring(scheme.length))
 }
 
 private suspend fun <T> CompletableFuture<T>.awaitHttp(uri: String): T {

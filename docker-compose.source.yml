@@ -1,0 +1,5 @@
+services:
+  dynamic-bot:
+    build:
+      context: .
+    image: half-drop/dynamic-bot:local
