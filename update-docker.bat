@@ -8,12 +8,18 @@ set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%.") do set "SCRIPT_DIR=%%~fI"
 set "REPO_DIR="
 
-if exist "%SCRIPT_DIR%\.git" set "REPO_DIR=%SCRIPT_DIR%"
+rem Accept either a real Git checkout or an existing source/deployment directory without .git.
+if exist "%SCRIPT_DIR%\build.gradle.kts" if exist "%SCRIPT_DIR%\Dockerfile" set "REPO_DIR=%SCRIPT_DIR%"
+if not defined REPO_DIR if exist "%SCRIPT_DIR%\dynamic-bot\build.gradle.kts" if exist "%SCRIPT_DIR%\dynamic-bot\Dockerfile" set "REPO_DIR=%SCRIPT_DIR%\dynamic-bot"
+if not defined REPO_DIR if exist "%SCRIPT_DIR%\.git" set "REPO_DIR=%SCRIPT_DIR%"
 if not defined REPO_DIR if exist "%SCRIPT_DIR%\dynamic-bot\.git" set "REPO_DIR=%SCRIPT_DIR%\dynamic-bot"
 
 if not defined REPO_DIR (
-    echo [ERROR] dynamic-bot Git repository was not found.
-    echo Put this file in the dynamic-bot repository or its parent deployment directory.
+    echo [ERROR] dynamic-bot directory was not found.
+    echo Expected either:
+    echo   %SCRIPT_DIR%build.gradle.kts
+    echo or:
+    echo   %SCRIPT_DIR%dynamic-bot\build.gradle.kts
     goto :fail
 )
 
@@ -31,10 +37,14 @@ docker info >nul 2>nul || (
 )
 
 echo [1/4] Syncing source from half-drop/dynamic-bot main...
+if not exist "%REPO_DIR%\.git" (
+    echo       Existing source directory is not a Git repository; initializing it now.
+    git -C "%REPO_DIR%" init || goto :fail
+)
 git -C "%REPO_DIR%" fetch --no-tags "%UPDATE_REPO%" main || goto :fail
 git -C "%REPO_DIR%" reset --hard FETCH_HEAD || goto :fail
 
-rem Remove the old temporary JAR-injection patch files and temp directories created by earlier patch attempts.
+rem Remove old temporary JAR-injection patches and temp directories from earlier patch attempts.
 if exist "%REPO_DIR%\patches" rd /s /q "%REPO_DIR%\patches" >nul 2>nul
 for /d %%D in ("%REPO_DIR%\.tmp-*") do (
     if exist "%%~fD" rd /s /q "%%~fD" >nul 2>nul
@@ -52,7 +62,7 @@ for %%F in (docker-compose.yml docker-compose.yaml compose.yml compose.yaml) do 
     )
 )
 
-rem Also support copying this BAT to the deployment directory while keeping the repo in .\dynamic-bot.
+rem Also support putting this BAT in the deployment directory while keeping source in .\dynamic-bot.
 if /I not "%SCRIPT_DIR%"=="%REPO_DIR%" (
     for %%F in (docker-compose.yml docker-compose.yaml compose.yml compose.yaml) do (
         if not defined EXTERNAL_COMPOSE if exist "%SCRIPT_DIR%\%%F" (
@@ -116,7 +126,7 @@ if defined EXTERNAL_COMPOSE (
 
 echo.
 echo [OK] dynamic-bot was updated from half-drop/dynamic-bot main and rebuilt from source.
-echo Config, data and logs directories are not touched by git reset because they are gitignored.
+echo Existing config/data/logs are not deleted; only tracked source files are reset to GitHub main.
 echo.
 docker logs --tail 30 dynamic-bot 2>nul
 echo.
