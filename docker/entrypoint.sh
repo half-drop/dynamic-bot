@@ -80,6 +80,30 @@ ensure_writable_dir() {
   fi
 }
 
+# A bind-mounted directory can itself be writable while old files inside it are
+# still owned by root and mode 600/644. In that case the old directory-only
+# check succeeds, but Java later fails on config/main.yml or dynamic-bot.log.
+# Config and logs are small writable trees, so in auto mode inspect existing
+# entries and repair the tree only when at least one entry is not writable.
+ensure_writable_tree() {
+  dir="$1"
+  ensure_writable_dir "$dir"
+
+  if [ "$FIX_VOLUME_PERMISSIONS" = "auto" ]; then
+    first_unwritable="$(gosu "$APP_USER" find "$dir" -xdev -mindepth 1 ! -writable -print -quit 2>/dev/null || true)"
+    if [ -n "$first_unwritable" ]; then
+      echo "提示: $dir 中存在对 $APP_UID:$APP_GID 不可写的旧文件，正在修复权限：$first_unwritable"
+      chown -R "$APP_UID:$APP_GID" "$dir"
+    fi
+  fi
+
+  first_unwritable="$(gosu "$APP_USER" find "$dir" -xdev -mindepth 1 ! -writable -print -quit 2>/dev/null || true)"
+  if [ -n "$first_unwritable" ]; then
+    echo "错误: $first_unwritable 对 $APP_UID:$APP_GID 仍不可写。请检查宿主机文件权限。" >&2
+    exit 1
+  fi
+}
+
 ensure_runtime_dir() {
   dir="$1"
   mkdir -p "$dir"
@@ -100,11 +124,14 @@ do
   ensure_runtime_dir "$dir"
 done
 
+# Repair complete writable trees first. This specifically handles upgrades from
+# older images that left root-owned main.yml or dynamic-bot.log behind.
+ensure_writable_tree /app/config
+ensure_writable_tree "$LOG_DIR"
+
 for dir in \
   /app/data \
-  /app/config \
   /app/plugins \
-  "$LOG_DIR" \
   /app/data/images/source \
   /app/data/images/draw \
   /app/data/plugins \
