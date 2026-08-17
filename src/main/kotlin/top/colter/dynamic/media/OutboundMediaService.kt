@@ -259,7 +259,7 @@ public class OutboundMediaService(
             sizeBytes: Long,
             profile: MediaDeliveryProfile,
         ): MediaRef? {
-            val candidates = autoBaseUrlCandidates(config, advice())
+            val candidates = autoBaseUrlCandidates(config, profile, advice())
             for (baseUrl in candidates) {
                 val probeUrl = probeSignedUrl(baseUrl, profile) ?: continue
                 val probeStatus = probe(
@@ -425,12 +425,14 @@ public class OutboundMediaService(
 
     private fun autoBaseUrlCandidates(
         config: MainDynamicConfig,
+        profile: MediaDeliveryProfile,
         advice: MessageSinkMediaDeliveryAdvice,
     ): List<String> {
         if (!config.webAdmin.enabled) return emptyList()
         val port = config.webAdmin.port
         val configuredHost = config.webAdmin.host.trim()
         return buildList {
+            add(profile.signedUrl.publicBaseUrl)
             add("http://127.0.0.1:$port")
             add("http://localhost:$port")
             if (configuredHost.isNotBlank() && !configuredHost.isWildcardBindAddress()) {
