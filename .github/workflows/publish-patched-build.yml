@@ -143,7 +143,9 @@ jobs:
             dynamic-bot-dropin-selftest:latest \
             sh -c 'test -r /app/config/main.yml && test -w /app/config/main.yml && test -w /app/logs/dynamic-bot.log && printf "permission-selftest-ok\n" >> /app/logs/dynamic-bot.log'
 
-          grep -q 'permission-selftest-ok' permission-fixture/logs/dynamic-bot.log
+          # The container intentionally chowns the bind-mounted file to UID 1000,
+          # so the GitHub runner user may no longer be allowed to read mode-0600 file.
+          sudo grep -q 'permission-selftest-ok' permission-fixture/logs/dynamic-bot.log
 
           cd release
           sha256sum dynamic-bot-* > SHA256SUMS.txt
