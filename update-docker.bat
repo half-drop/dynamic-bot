@@ -3,6 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 title dynamic-bot one-click update
 
+set "UPDATE_REPO=https://github.com/half-drop/dynamic-bot.git"
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%.") do set "SCRIPT_DIR=%%~fI"
 set "REPO_DIR="
@@ -29,14 +30,15 @@ docker info >nul 2>nul || (
     goto :fail
 )
 
-echo [1/4] Syncing source from GitHub...
-git -C "%REPO_DIR%" fetch origin main || goto :fail
-git -C "%REPO_DIR%" reset --hard origin/main || goto :fail
+echo [1/4] Syncing source from half-drop/dynamic-bot main...
+git -C "%REPO_DIR%" fetch --no-tags "%UPDATE_REPO%" main || goto :fail
+git -C "%REPO_DIR%" reset --hard FETCH_HEAD || goto :fail
 
-rem Remove the old temporary JAR-injection patch files if Codex created them locally.
-if exist "%REPO_DIR%\patches\CdnUriNormalizer.java" del /f /q "%REPO_DIR%\patches\CdnUriNormalizer.java" >nul 2>nul
-if exist "%REPO_DIR%\patches\PatchHttpImageDownloader.java" del /f /q "%REPO_DIR%\patches\PatchHttpImageDownloader.java" >nul 2>nul
-if exist "%REPO_DIR%\patches" rd "%REPO_DIR%\patches" >nul 2>nul
+rem Remove the old temporary JAR-injection patch files and temp directories created by earlier patch attempts.
+if exist "%REPO_DIR%\patches" rd /s /q "%REPO_DIR%\patches" >nul 2>nul
+for /d %%D in ("%REPO_DIR%\.tmp-*") do (
+    if exist "%%~fD" rd /s /q "%%~fD" >nul 2>nul
+)
 
 set "EXTERNAL_COMPOSE="
 set "EXTERNAL_DIR="
@@ -113,7 +115,7 @@ if defined EXTERNAL_COMPOSE (
 )
 
 echo.
-echo [OK] dynamic-bot was updated from GitHub main and rebuilt from source.
+echo [OK] dynamic-bot was updated from half-drop/dynamic-bot main and rebuilt from source.
 echo Config, data and logs directories are not touched by git reset because they are gitignored.
 echo.
 docker logs --tail 30 dynamic-bot 2>nul
