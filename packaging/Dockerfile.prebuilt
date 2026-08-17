@@ -31,9 +31,11 @@ RUN set -eux; \
 
 WORKDIR /app
 
+# The drop-in release keeps every required build input at the ZIP root so
+# Windows Explorer extraction/overwrite does not depend on merging subfolders.
 COPY --chown=dynamicbot:dynamicbot dynamic-bot.jar /app/dynamic-bot.jar
-COPY --chown=dynamicbot:dynamicbot plugins/catalog.json /app/defaults/plugins/catalog.json
-COPY docker/entrypoint.sh /app/entrypoint.sh
+COPY --chown=dynamicbot:dynamicbot catalog.json /app/defaults/plugins/catalog.json
+COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 2233
