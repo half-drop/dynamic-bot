@@ -1,0 +1,114 @@
+name: Publish patched build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-patched-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew ./scripts/*.sh
+          ./gradlew --no-daemon test fatJar
+
+      - name: Package prebuilt artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="0.0.8-halfdrop.1"
+          JAR_FILE="$(ls build/libs/*-all.jar | head -n 1)"
+          mkdir -p release
+
+          # Raw prebuilt fat JAR.
+          cp "$JAR_FILE" "release/dynamic-bot-${VERSION}-all.jar"
+
+          # Standard Windows/Linux packages without bundled JRE.
+          INCLUDE_JRE_PACKAGES=false ./scripts/package-release.sh "$VERSION" "$JAR_FILE" release
+
+          # Docker drop-in package for the existing D:\\Wise_G\\dynamic-bot build context.
+          rm -rf docker-dropin
+          mkdir -p docker-dropin/docker docker-dropin/plugins
+          cp "$JAR_FILE" docker-dropin/dynamic-bot.jar
+          cp packaging/Dockerfile.prebuilt docker-dropin/Dockerfile
+          cp docker/entrypoint.sh docker-dropin/docker/entrypoint.sh
+          cp plugins/catalog.json docker-dropin/plugins/catalog.json
+
+          cat > docker-dropin/README-覆盖说明.txt <<'EOF'
+          这是已经编译好的 dynamic-bot Docker 覆盖包。
+
+          用法：
+          1. 停止或保留当前容器均可。
+          2. 将本 ZIP 的内容解压到 D:\Wise_G\dynamic-bot，允许覆盖同名文件。
+          3. 不要删除原来的 config、data、logs、plugins 中已有的运行数据。
+          4. 双击 apply-update.bat；它会使用 D:\Wise_G\docker-compose.yml 重建并启动 dynamic-bot。
+
+          此包中的 Dockerfile 不再运行 Gradle 编译，而是直接 COPY 已编译好的 dynamic-bot.jar。
+          EOF
+
+          printf '%s\r\n' \
+            '@echo off' \
+            'setlocal' \
+            'chcp 65001 >nul' \
+            'cd /d "%~dp0.."' \
+            'docker info >nul 2>nul || (echo [ERROR] Docker is not running.& pause & exit /b 1)' \
+            'docker compose build --pull dynamic-bot || goto :fail' \
+            'docker compose up -d --no-deps dynamic-bot || goto :fail' \
+            'docker compose ps dynamic-bot' \
+            'echo.' \
+            'echo [OK] dynamic-bot updated from prebuilt release.' \
+            'pause' \
+            'exit /b 0' \
+            ':fail' \
+            'echo.' \
+            'echo [FAILED] dynamic-bot update failed.' \
+            'pause' \
+            'exit /b 1' \
+            > docker-dropin/apply-update.bat
+
+          (cd docker-dropin && zip -qr "../release/dynamic-bot-v${VERSION}-docker-dropin.zip" .)
+
+          cd release
+          sha256sum dynamic-bot-* > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v0.0.8-halfdrop.1"
+          TITLE="dynamic-bot v0.0.8-halfdrop.1"
+          NOTES=$'half-drop 修复构建版。\n\n包含：\n- Bilibili hdslb.com HTTP 图片地址自动升级为 HTTPS，规避封面下载 EOF。\n- Docker/OneBot 签名链接 AUTO 模式优先使用 signedUrl.publicBaseUrl，避免先探测 127.0.0.1:2233。\n\n推荐 Docker 用户下载 dynamic-bot-v0.0.8-halfdrop.1-docker-dropin.zip，解压覆盖 D:\\Wise_G\\dynamic-bot 后运行 apply-update.bat。config/data/logs 不在覆盖包中。'
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes "$NOTES"
+          fi
