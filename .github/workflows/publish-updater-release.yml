@@ -1,0 +1,37 @@
+name: Publish updater release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-updater-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish updater release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="updater-2026.08.17.1"
+          TITLE="dynamic-bot updater 2026.08.17.1"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" update-docker.bat --clobber
+          else
+            gh release create "$TAG" update-docker.bat \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes $'Windows 一键更新脚本。\n\n修复：本地 dynamic-bot 源码目录没有 .git 时不再直接退出；会识别现有源码目录、自动初始化 Git，并从 half-drop/dynamic-bot main 同步源码后重新构建容器。\n\n附件：update-docker.bat'
+          fi
