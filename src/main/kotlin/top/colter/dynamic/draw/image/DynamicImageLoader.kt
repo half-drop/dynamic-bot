@@ -206,13 +206,14 @@ public class HttpImageDownloader(
 }
 
 internal fun normalizeRemoteImageUri(uri: URI): URI {
-    if (!uri.scheme.equals("http", ignoreCase = true)) return uri
+    val scheme = uri.scheme ?: return uri
+    if (!scheme.equals("http", ignoreCase = true)) return uri
     val host = uri.host ?: return uri
     if (!host.equals("hdslb.com", ignoreCase = true) && !host.endsWith(".hdslb.com", ignoreCase = true)) {
         return uri
     }
     val original = uri.toString()
-    return URI("https" + original.substring(uri.scheme.length))
+    return URI("https" + original.substring(scheme.length))
 }
 
 private suspend fun <T> CompletableFuture<T>.awaitHttp(uri: String): T {
