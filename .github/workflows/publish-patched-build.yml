@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - .github/workflows/publish-patched-build.yml
+      - docker/entrypoint.sh
+      - packaging/Dockerfile.prebuilt
+      - src/**
   workflow_dispatch:
 
 permissions:
@@ -39,14 +42,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="0.0.8-halfdrop.2"
+          VERSION="0.0.8-halfdrop.3"
           JAR_FILE="$(ls build/libs/*-all.jar | head -n 1)"
           mkdir -p release
 
           cp "$JAR_FILE" "release/dynamic-bot-${VERSION}-all.jar"
           INCLUDE_JRE_PACKAGES=false ./scripts/package-release.sh "$VERSION" "$JAR_FILE" release
 
-          rm -rf docker-dropin verify-dropin
+          rm -rf docker-dropin verify-dropin permission-fixture
           mkdir -p docker-dropin
           cp "$JAR_FILE" docker-dropin/dynamic-bot.jar
           cp packaging/Dockerfile.prebuilt docker-dropin/Dockerfile
@@ -73,10 +76,11 @@ jobs:
 
           用法：
           1. 将本 ZIP 里的所有文件直接解压/复制到 D:\Wise_G\dynamic-bot，允许覆盖同名文件。
-          2. 本包所有 Docker 构建必需文件都在根目录，不依赖 docker/ 或 plugins/ 子目录。
+          2. 本包所有 Docker 构建必需文件都在根目录。
           3. 不要删除原来的 config、data、logs、plugins 运行数据。
           4. 双击 apply-update.bat。
 
+          halfdrop.3 额外修复旧 bind mount 内已有 main.yml / dynamic-bot.log 文件权限不属于 1000:1000 时的启动失败。
           Dockerfile 会直接 COPY 已编译好的 dynamic-bot.jar，不会在你的电脑上执行 Gradle。
           EOF
 
@@ -119,8 +123,27 @@ jobs:
           test -f verify-dropin/apply-update.bat
           test -f verify-dropin/.dockerignore
 
-          # Final release gate: prove the exact extracted ZIP can be used as a Docker build context.
+          # Gate 1: prove the exact extracted ZIP is a valid Docker build context.
           docker build -t dynamic-bot-dropin-selftest:latest verify-dropin
+
+          # Gate 2: reproduce the Windows-upgrade failure pattern. The bind-mounted
+          # directories are writable, but existing files are owned by another UID
+          # and mode 0600. The entrypoint must repair them before dropping to UID 1000.
+          mkdir -p permission-fixture/config permission-fixture/logs permission-fixture/data permission-fixture/plugins
+          printf 'webAdmin:\n  enabled: true\n' > permission-fixture/config/main.yml
+          printf 'old log\n' > permission-fixture/logs/dynamic-bot.log
+          chmod 0777 permission-fixture/config permission-fixture/logs permission-fixture/data permission-fixture/plugins
+          chmod 0600 permission-fixture/config/main.yml permission-fixture/logs/dynamic-bot.log
+
+          docker run --rm \
+            -v "$PWD/permission-fixture/config:/app/config" \
+            -v "$PWD/permission-fixture/logs:/app/logs" \
+            -v "$PWD/permission-fixture/data:/app/data" \
+            -v "$PWD/permission-fixture/plugins:/app/plugins" \
+            dynamic-bot-dropin-selftest:latest \
+            sh -c 'test -r /app/config/main.yml && test -w /app/config/main.yml && test -w /app/logs/dynamic-bot.log && printf "permission-selftest-ok\n" >> /app/logs/dynamic-bot.log'
+
+          grep -q 'permission-selftest-ok' permission-fixture/logs/dynamic-bot.log
 
           cd release
           sha256sum dynamic-bot-* > SHA256SUMS.txt
@@ -131,9 +154,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="v0.0.8-halfdrop.2"
-          TITLE="dynamic-bot v0.0.8-halfdrop.2"
-          NOTES=$'half-drop 修复构建版。\n\n修复内容：\n- Bilibili hdslb.com HTTP 图片地址自动升级 HTTPS，规避封面下载 EOF。\n- Docker/OneBot 签名链接 AUTO 优先使用 signedUrl.publicBaseUrl，避免先探测 127.0.0.1:2233。\n- 修复 halfdrop.1 Docker 覆盖包缺少构建输入的问题。halfdrop.2 将 entrypoint.sh、catalog.json、Dockerfile、dynamic-bot.jar 全部放在 ZIP 根目录。\n- Release 发布前会实际解压 ZIP 并执行 docker build，自检不通过则不会发布。\n\nDocker 用户下载 dynamic-bot-v0.0.8-halfdrop.2-docker-dropin.zip，覆盖 D:\\Wise_G\\dynamic-bot 后运行 apply-update.bat。config/data/logs 不在覆盖包中。'
+          TAG="v0.0.8-halfdrop.3"
+          TITLE="dynamic-bot v0.0.8-halfdrop.3"
+          NOTES=$'half-drop 修复构建版。\n\n修复内容：\n- Bilibili hdslb.com HTTP 图片地址自动升级 HTTPS，规避封面下载 EOF。\n- Docker/OneBot 签名链接 AUTO 优先使用 signedUrl.publicBaseUrl，避免先探测 127.0.0.1:2233。\n- Docker 覆盖包使用预编译 JAR，Release 前实际解压并 docker build。\n- 修复旧 bind mount 中 config/main.yml、logs/dynamic-bot.log 等已有文件仍属于旧 owner 时，目录虽然可写但 Java 读取/追加文件 Permission denied 的问题。\n- CI 新增权限回归测试：构造可写目录 + 0600 旧文件，验证 entrypoint 会修复后再降权到 UID 1000。\n\nDocker 用户下载 dynamic-bot-v0.0.8-halfdrop.3-docker-dropin.zip，覆盖 D:\\Wise_G\\dynamic-bot 后运行 apply-update.bat。config/data/logs 不在覆盖包中。'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release/* --clobber
